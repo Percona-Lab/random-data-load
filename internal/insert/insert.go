@@ -262,13 +262,19 @@ func makeValueFuncs(conn *sql.DB, fields []tableparser.Field, cg map[string]stri
 	return values
 }
 
+var storedSampleCount = map[string]int64{}
+
 func getSamples(conn *sql.DB, schema, table, field string, samples int64, dataType string) ([]interface{}, error) {
 	var count int64
 	var query string
 
-	queryCount := fmt.Sprintf("SELECT COUNT(*) FROM `%s`.`%s`", schema, table)
-	if err := conn.QueryRow(queryCount).Scan(&count); err != nil {
-		return nil, fmt.Errorf("cannot get count for table %q: %s", table, err)
+	count, ok := storedSampleCount[schema+"#"+table] 
+	if !ok {
+		queryCount := fmt.Sprintf("SELECT COUNT(*) FROM `%s`.`%s`", schema, table)
+		if err := conn.QueryRow(queryCount).Scan(&count); err != nil {
+			return nil, fmt.Errorf("cannot get count for table %q: %s", table, err)
+		}
+		storedSampleCount[schema+"#"+table]=count
 	}
 
 	if count < samples {

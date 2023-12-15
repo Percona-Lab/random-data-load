@@ -12,9 +12,10 @@ type RandomSample struct {
 }
 
 func (r *RandomSample) Value() interface{} {
-	if r.allowNull && rand.Int63n(100) < nilFrequency {
+	if (r.allowNull && rand.Int63n(100) < nilFrequency) || len(r.samples) == 0 {
 		return nil
 	}
+
 	pos := rand.Int63n(int64(len(r.samples)))
 	return r.samples[pos]
 }
