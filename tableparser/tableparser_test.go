@@ -4,10 +4,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Percona-Lab/mysql_random_data_load/internal/tu"
 	_ "github.com/go-sql-driver/mysql"
 	version "github.com/hashicorp/go-version"
 	log "github.com/sirupsen/logrus"
+	"github.com/ylacancellera/random-data-load/internal/tu"
 )
 
 func TestParse(t *testing.T) {

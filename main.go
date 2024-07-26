@@ -1,45 +1,53 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"net/http"
 
-	"github.com/Percona-Lab/mysql_random_data_load/cmd"
+	_ "net/http/pprof"
+
 	"github.com/alecthomas/kong"
-)
-
-var (
-	cli struct {
-		Run cmd.RunCmd `cmd:"run" help:"Starts the insert process"`
-	}
-
-	Version   = "0.0.0."
-	Commit    = "<sha1>"
-	Branch    = "branch-name"
-	Build     = "2017-01-01"
-	GoVersion = "1.9.2"
+	"github.com/ylacancellera/random-data-load/cmd"
 )
 
 const (
-	defaultMySQLConfigSection = "client"
+	toolname = "random-data-load"
 )
 
+var (
+	Build     string //nolint
+	GoVersion string //nolint
+	Version   string //nolint
+	Commit    string //nolint
+)
+
+var buildInfo = fmt.Sprintf("%s\nVersion %s\nBuild: %s using %s\nCommit: %s", toolname, Version, Build, GoVersion, Commit)
+
+var cli struct {
+	Run     cmd.RunCmd `cmd:"run" help:"Starts the insert process"`
+	Version kong.VersionFlag
+}
+
 func main() {
-	ctx := kong.Parse(&cli,
-		kong.Name("MySQL random data loader"),
-		kong.Description("Load random data into a MySQL table"),
+	kongcli := kong.Parse(&cli,
+		kong.Name(toolname),
+		kong.Description("Load random data into a table"),
 		kong.UsageOnError(),
+		kong.Vars{
+			"version": buildInfo,
+		},
 		kong.ConfigureHelp(kong.HelpOptions{
 			Compact: false,
 			Summary: true,
 			Tree:    true,
 		}),
 	)
-	switch ctx.Command() {
-	case "run":
-		if err := ctx.Run(); err != nil {
-			log.Fatalf(err.Error())
-		}
-	default:
-		log.Fatalf("Unknown command")
-	}
+	// Server for pprof
+	go func() {
+		log.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+
+	err := kongcli.Run()
+	kongcli.FatalIfErrorf(err)
 }

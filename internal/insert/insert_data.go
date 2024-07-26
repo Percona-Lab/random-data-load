@@ -1,6 +1,6 @@
 package insert
 
-import "github.com/Percona-Lab/mysql_random_data_load/internal/getters"
+import "github.com/ylacancellera/random-data-load/internal/getters"
 
 type insertValues []getters.Getter
 

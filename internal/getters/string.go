@@ -60,7 +60,7 @@ func (r *RandomString) Quote() string {
 	if v == nil {
 		return NULL
 	}
-	return fmt.Sprintf("%q", v)
+	return fmt.Sprintf("'%s'", v)
 }
 
 func NewRandomString(name string, maxSize int64, allowNull bool) *RandomString {

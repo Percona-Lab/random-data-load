@@ -8,16 +8,16 @@ import (
 // RandomDecimal holds unexported data for decimal values
 type RandomDecimal struct {
 	name      string
-	size      int64
+	precision int64
+	scale     int64
 	allowNull bool
 }
 
 func (r *RandomDecimal) Value() interface{} {
-	size := r.size
-	if size > 10 {
-		size = 10
+	f := rand.Float64()
+	if r.precision > 0 {
+		f *= float64(rand.Int63n(int64(r.precision)))
 	}
-	f := rand.Float64() * float64(rand.Int63n(int64(size)))
 	return f
 }
 
@@ -29,6 +29,6 @@ func (r *RandomDecimal) Quote() string {
 	return r.String()
 }
 
-func NewRandomDecimal(name string, size int64, allowNull bool) *RandomDecimal {
-	return &RandomDecimal{name, size, allowNull}
+func NewRandomDecimal(name string, precision, scale int64, allowNull bool) *RandomDecimal {
+	return &RandomDecimal{name, precision, scale, allowNull}
 }

@@ -5,25 +5,24 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/url"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/Percona-Lab/mysql_random_data_load/internal/getters"
-	"github.com/Percona-Lab/mysql_random_data_load/tableparser"
+	"github.com/ylacancellera/random-data-load/db"
+	"github.com/ylacancellera/random-data-load/internal/getters"
 )
 
 type Insert struct {
 	db         *sql.DB
-	table      *tableparser.Table
+	table      *db.Table
 	writer     io.Writer
 	notifyChan chan int64
 }
 
 var (
 	maxValues = map[string]int64{
-		"tinyint":   0XF,
+		"tinyint":   0xF,
 		"smallint":  0xFF,
 		"mediumint": 0x7FFFF,
 		"int":       0x7FFFFFFF,
@@ -36,7 +35,7 @@ var (
 )
 
 // New returns a new Insert instance.
-func New(db *sql.DB, table *tableparser.Table) *Insert {
+func New(db *sql.DB, table *db.Table) *Insert {
 	return &Insert{
 		db:     db,
 		table:  table,
@@ -144,28 +143,27 @@ func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
 	return ra, err
 }
 
-func generateInsertStmt(table *tableparser.Table) string {
+func generateInsertStmt(table *db.Table) string {
 	fields := getFieldNames(table.Fields)
-	query := fmt.Sprintf("INSERT IGNORE INTO %s.%s (%s) VALUES \n", //nolint
-		backticks(table.Schema),
-		backticks(table.Name),
+	query := fmt.Sprintf(db.InsertTemplate(), //nolint
+		db.Escape(table.Schema),
+		db.Escape(table.Name),
 		strings.Join(fields, ","),
 	)
 	return query
 }
 
-func getFieldNames(fields []tableparser.Field) []string {
+func getFieldNames(fields []db.Field) []string {
 	fieldNames := make([]string, 0, len(fields))
 
 	for _, field := range fields {
 		if !isSupportedType(field.DataType) {
 			continue
 		}
-		if !field.IsNullable && field.ColumnKey == "PRI" &&
-			strings.Contains(field.Extra, "auto_increment") {
+		if !field.IsNullable && field.ColumnKey == "PRI" && field.AutoIncrement {
 			continue
 		}
-		fieldNames = append(fieldNames, backticks(field.ColumnName))
+		fieldNames = append(fieldNames, db.Escape(field.ColumnName))
 	}
 	return fieldNames
 }
@@ -200,15 +198,17 @@ func isSupportedType(fieldType string) bool {
 		"varbinary":  true,
 		"enum":       true,
 		"set":        true,
+		"bool":       true,
+		"boolean":    true,
 	}
 	_, ok := supportedTypes[fieldType]
 	return ok
 }
 
-func makeValueFuncs(conn *sql.DB, fields []tableparser.Field, cg map[string]string) insertValues {
+func makeValueFuncs(conn *sql.DB, fields []db.Field, cg map[string]string) insertValues {
 	var values []getters.Getter
 	for _, field := range fields {
-		if !field.IsNullable && field.ColumnKey == "PRI" && strings.Contains(field.Extra, "auto_increment") {
+		if !field.IsNullable && field.ColumnKey == "PRI" && field.AutoIncrement {
 			continue
 		}
 		if field.Constraint != nil {
@@ -228,13 +228,12 @@ func makeValueFuncs(conn *sql.DB, fields []tableparser.Field, cg map[string]stri
 			maxValue = m
 		}
 		switch field.DataType {
-		case "tinyint":
+		case "tinyint", "bit", "bool", "boolean":
 			values = append(values, getters.NewRandomIntRange(field.ColumnName, 0, 1, field.IsNullable))
 		case "smallint", "mediumint", "int", "integer", "bigint":
 			values = append(values, getters.NewRandomInt(field.ColumnName, maxValue, field.IsNullable))
-		case "float", "decimal", "double":
-			values = append(values, getters.NewRandomDecimal(field.ColumnName,
-				field.NumericPrecision.Int64-field.NumericScale.Int64, field.IsNullable))
+		case "float", "decimal", "double", "numeric":
+			values = append(values, getters.NewRandomDecimal(field.ColumnName, field.NumericPrecision.Int64, field.NumericScale.Int64, field.IsNullable))
 		case "char", "varchar":
 			values = append(values, getters.NewRandomString(field.ColumnName,
 				field.CharacterMaximumLength.Int64, field.IsNullable))
@@ -268,20 +267,20 @@ func getSamples(conn *sql.DB, schema, table, field string, samples int64, dataTy
 	var count int64
 	var query string
 
-	count, ok := storedSampleCount[schema+"#"+table] 
+	count, ok := storedSampleCount[schema+"#"+table]
 	if !ok {
-		queryCount := fmt.Sprintf("SELECT COUNT(*) FROM `%s`.`%s`", schema, table)
+		queryCount := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s", db.Escape(schema), db.Escape(table))
 		if err := conn.QueryRow(queryCount).Scan(&count); err != nil {
 			return nil, fmt.Errorf("cannot get count for table %q: %s", table, err)
 		}
-		storedSampleCount[schema+"#"+table]=count
+		storedSampleCount[schema+"#"+table] = count
 	}
 
 	if count < samples {
-		query = fmt.Sprintf("SELECT `%s` FROM `%s`.`%s`", field, schema, table)
+		query = fmt.Sprintf("SELECT %s FROM %s.%s", db.Escape(field), db.Escape(schema), db.Escape(table))
 	} else {
-		query = fmt.Sprintf("SELECT `%s` FROM `%s`.`%s` WHERE RAND() <= .3 LIMIT %d",
-			field, schema, table, samples)
+		query = fmt.Sprintf("SELECT %s FROM %s.%s WHERE RAND() <= .3 LIMIT %d",
+			db.Escape(field), db.Escape(schema), db.Escape(table), samples)
 	}
 
 	rows, err := conn.Query(query)
@@ -328,11 +327,4 @@ func getSamples(conn *sql.DB, schema, table, field string, samples int64, dataTy
 		return nil, fmt.Errorf("cannot get samples: %s", err)
 	}
 	return values, nil
-}
-
-func backticks(val string) string {
-	if strings.HasPrefix(val, "`") && strings.HasSuffix(val, "`") {
-		return url.QueryEscape(val)
-	}
-	return "`" + url.QueryEscape(val) + "`"
 }

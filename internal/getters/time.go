@@ -21,17 +21,19 @@ func (r *RandomTime) Value() interface{} {
 }
 
 func (r *RandomTime) String() string {
-	if r == nil {
+	value := r.Value()
+	if value == nil {
 		return NULL
 	}
-	return r.Value().(string)
+	return value.(string)
 }
 
 func (r *RandomTime) Quote() string {
-	if r == nil {
+	value := r.Value()
+	if value == nil {
 		return NULL
 	}
-	return fmt.Sprintf("%q", r.Value())
+	return fmt.Sprintf("'%s'", value)
 }
 
 func NewRandomTime(allowNull bool) *RandomTime {

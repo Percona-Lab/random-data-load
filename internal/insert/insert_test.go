@@ -3,9 +3,9 @@ package insert
 import (
 	"testing"
 
-	"github.com/Percona-Lab/mysql_random_data_load/internal/tu"
-	"github.com/Percona-Lab/mysql_random_data_load/tableparser"
 	"github.com/stretchr/testify/assert"
+	"github.com/ylacancellera/random-data-load/internal/tu"
+	"github.com/ylacancellera/random-data-load/tableparser"
 )
 
 func TestBasic(t *testing.T) {
