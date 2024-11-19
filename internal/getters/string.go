@@ -10,10 +10,8 @@ import (
 
 // RandomString getter
 type RandomString struct {
-	name      string
-	maxSize   uint64
-	allowNull bool
-	fn        func() string
+	value string
+	null  bool
 }
 
 var (
@@ -35,35 +33,29 @@ var (
 )
 
 func (r *RandomString) Value() interface{} {
-	if r.allowNull && rand.Int63n(100) < nilFrequency {
-		return nil
-	}
-
-	s := r.fn()
-	if len(s) > int(r.maxSize) {
-		s = s[:int(r.maxSize)]
-	}
-	return s
+	return r.value
 }
 
 func (r *RandomString) String() string {
-	v := r.Value()
-	if v == nil {
+	if r.null {
 		return NULL
 	}
-	return v.(string)
+	return r.value
 }
 
 // Quote returns a quoted string
 func (r *RandomString) Quote() string {
-	v := r.Value()
-	if v == nil {
+	if r.null {
 		return NULL
 	}
-	return fmt.Sprintf("'%s'", v)
+	return fmt.Sprintf("'%s'", r.value)
 }
 
 func NewRandomString(name string, maxSize int64, allowNull bool) *RandomString {
+
+	if allowNull && rand.Int63n(100) < nilFrequency {
+		return &RandomString{"", true}
+	}
 	var fn func() string
 
 	switch {
@@ -95,5 +87,9 @@ func NewRandomString(name string, maxSize int64, allowNull bool) *RandomString {
 		}
 	}
 
-	return &RandomString{name, uint64(maxSize), allowNull, fn}
+	s := fn()
+	if len(s) > int(maxSize) {
+		s = s[:int(maxSize)]
+	}
+	return &RandomString{s, false}
 }

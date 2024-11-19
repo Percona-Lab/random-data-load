@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog/log"
 )
 
 type MySQL struct{}
@@ -94,12 +95,13 @@ func (_ MySQL) GetFields(schema, tablename string) ([]Field, error) {
 	var fields = []Field{}
 
 	for rows.Next() {
+
 		var f Field
 		var allowNull, columnType string
-		fields := makeScanRecipients(&f, &allowNull, &columnType, cols)
-		err := rows.Scan(fields...)
+		scanRecipients := makeScanRecipients(&f, &allowNull, &columnType, cols)
+		err := rows.Scan(scanRecipients...)
 		if err != nil {
-			//log.Errorf("Cannot get table fields: %s", err)
+			log.Error().Err(err).Msg("cannot get fields")
 			continue
 		}
 
@@ -187,19 +189,21 @@ func (_ MySQL) GetIndexes(schema, tableName string) (map[string]Index, error) {
 	return indexes, nil
 }
 */
+
 func (_ MySQL) GetConstraints(schema, tableName string) ([]Constraint, error) {
-	query := "SELECT tc.CONSTRAINT_NAME, " +
-		"kcu.COLUMN_NAME, " +
-		"kcu.REFERENCED_TABLE_SCHEMA, " +
-		"kcu.REFERENCED_TABLE_NAME, " +
-		"kcu.REFERENCED_COLUMN_NAME " +
-		"FROM information_schema.TABLE_CONSTRAINTS tc " +
-		"LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu " +
-		"ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME " +
-		"WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY' " +
-		fmt.Sprintf("AND tc.TABLE_SCHEMA = '%s' ", schema) +
-		fmt.Sprintf("AND tc.TABLE_NAME = '%s'", tableName)
-	rows, err := DB.Query(query)
+	query := `SELECT tc.CONSTRAINT_NAME,
+		kcu.REFERENCED_TABLE_SCHEMA,
+		kcu.REFERENCED_TABLE_NAME,
+		group_concat(kcu.COLUMN_NAME ORDER BY ordinal_position SEPARATOR ';'),
+		group_concat(kcu.REFERENCED_COLUMN_NAME ORDER BY ordinal_position SEPARATOR ';')
+		FROM information_schema.TABLE_CONSTRAINTS tc
+		LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu
+		ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+		WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+		AND tc.TABLE_SCHEMA = ?
+		AND tc.TABLE_NAME = ?
+		GROUP BY 1,2,3`
+	rows, err := DB.Query(query, schema, tableName)
 	if err != nil {
 		return nil, err
 	}
@@ -209,11 +213,14 @@ func (_ MySQL) GetConstraints(schema, tableName string) ([]Constraint, error) {
 
 	for rows.Next() {
 		var c Constraint
-		err := rows.Scan(&c.ConstraintName, &c.ColumnName, &c.ReferencedTableSchema,
-			&c.ReferencedTableName, &c.ReferencedColumnName)
+		var columnsNameAgg, refColumnsNameAgg string
+		err := rows.Scan(&c.ConstraintName, &c.ReferencedTableSchema,
+			&c.ReferencedTableName, &columnsNameAgg, &refColumnsNameAgg)
 		if err != nil {
 			return nil, fmt.Errorf("cannot read constraints: %s", err)
 		}
+		c.ColumnsName = strings.Split(columnsNameAgg, ";")
+		c.ReferencedColumsName = strings.Split(refColumnsNameAgg, ";")
 		constraints = append(constraints, c)
 	}
 
@@ -231,6 +238,7 @@ func (_ MySQL) Escape(s string) string {
 	return "`" + url.QueryEscape(s) + "`"
 }
 
-func (_ MySQL) SetTableMetadata(database, tablename string) Table {
-	return Table{Schema: database, Name: tablename}
+func (_ MySQL) SetTableMetadata(table *Table, database, tablename string) {
+	table.Schema = database
+	table.Name = tablename
 }

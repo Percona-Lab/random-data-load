@@ -6,14 +6,15 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 	version "github.com/hashicorp/go-version"
-	log "github.com/sirupsen/logrus"
+	"github.com/rs/zerolog/log"
+	"github.com/ylacancellera/random-data-load/db"
 	"github.com/ylacancellera/random-data-load/internal/tu"
 )
 
 func TestParse(t *testing.T) {
-	db := tu.GetMySQLConnection(t)
-	v := tu.GetMinorVersion(t, db)
-	var want *Table
+	conn := tu.GetMySQLConnection(t)
+	v := tu.GetMinorVersion(t, conn)
+	var want *db.Table
 
 	// Patch part of version is stripped by GetMinorVersion so for these test
 	// it is .0
@@ -27,7 +28,7 @@ func TestParse(t *testing.T) {
 		t.Fatalf("Unknown MySQL version %s", v.String())
 	}
 
-	table, err := New(db, "sakila", "film")
+	table, err := New(conn, "sakila", "film")
 	if err != nil {
 		t.Error(err)
 	}
@@ -73,7 +74,7 @@ func TestGetTriggers(t *testing.T) {
 	triggers[0].Created.Time = time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC)
 
 	if tu.UpdateSamples() {
-		log.Info("Updating sample file: " + sampleFile)
+		log.Info().Msg("Updating sample file: " + sampleFile)
 		tu.WriteJson(t, sampleFile, triggers)
 	}
 	tu.Ok(t, err)

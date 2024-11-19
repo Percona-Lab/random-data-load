@@ -2,8 +2,8 @@ package main
 
 import (
 	"fmt"
-	"log"
-	"net/http"
+	"os"
+	"runtime/pprof"
 
 	_ "net/http/pprof"
 
@@ -25,8 +25,10 @@ var (
 var buildInfo = fmt.Sprintf("%s\nVersion %s\nBuild: %s using %s\nCommit: %s", toolname, Version, Build, GoVersion, Commit)
 
 var cli struct {
-	Run     cmd.RunCmd `cmd:"run" help:"Starts the insert process"`
-	Version kong.VersionFlag
+	Run         cmd.RunCmd `cmd:"run" help:"Starts the insert process"`
+	Version     kong.VersionFlag
+	Profile     bool   `name:"pprof"`
+	CPUProfPath string `name:"cpu-prof-path" default:"cpu.prof"`
 }
 
 func main() {
@@ -43,10 +45,20 @@ func main() {
 			Tree:    true,
 		}),
 	)
-	// Server for pprof
-	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil))
-	}()
+
+	if cli.Profile {
+		f, err := os.Create(cli.CPUProfPath)
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+
+		// Start CPU profiling
+		if err := pprof.StartCPUProfile(f); err != nil {
+			panic(err)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	err := kongcli.Run()
 	kongcli.FatalIfErrorf(err)

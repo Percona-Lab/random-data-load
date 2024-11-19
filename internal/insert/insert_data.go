@@ -1,6 +1,8 @@
 package insert
 
-import "github.com/ylacancellera/random-data-load/internal/getters"
+import (
+	"github.com/ylacancellera/random-data-load/internal/getters"
+)
 
 type insertValues []getters.Getter
 

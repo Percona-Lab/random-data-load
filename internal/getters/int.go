@@ -6,13 +6,11 @@ import (
 )
 
 type RandomInt struct {
-	name      string
-	mask      int64
-	allowNull bool
+	value int64
 }
 
 func (r *RandomInt) Value() interface{} {
-	return rand.Int63n(r.mask)
+	return r.value
 }
 
 func (r *RandomInt) String() string {
@@ -24,19 +22,15 @@ func (r *RandomInt) Quote() string {
 }
 
 func NewRandomInt(name string, mask int64, allowNull bool) *RandomInt {
-	return &RandomInt{name, mask, allowNull}
+	return &RandomInt{rand.Int63n(mask)}
 }
 
 type RandomIntRange struct {
-	name      string
-	min       int64
-	max       int64
-	allowNull bool
+	value int64
 }
 
 func (r *RandomIntRange) Value() interface{} {
-	limit := r.max - r.min + 1
-	return r.min + rand.Int63n(limit)
+	return r.value
 }
 
 func (r *RandomIntRange) String() string {
@@ -48,5 +42,6 @@ func (r *RandomIntRange) Quote() string {
 }
 
 func NewRandomIntRange(name string, min, max int64, allowNull bool) *RandomIntRange {
-	return &RandomIntRange{name, min, max, allowNull}
+	limit := max - min + 1
+	return &RandomIntRange{min + rand.Int63n(limit)}
 }

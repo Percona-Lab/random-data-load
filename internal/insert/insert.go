@@ -4,10 +4,13 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/pkg/errors"
+	"github.com/rs/zerolog/log"
 
 	"github.com/ylacancellera/random-data-load/db"
 	"github.com/ylacancellera/random-data-load/internal/getters"
@@ -113,218 +116,205 @@ func (in *Insert) notify(n int64) {
 	}
 }
 
+// generate field and sample fields in parallel, since both operations are slow
+func (in *Insert) genQuery(count int64) *string {
+
+	if count < 1 {
+		return nil
+	}
+
+	fieldsToGen := in.table.FieldsToGenerate()
+	fieldsToSample := in.table.FieldsToSample()
+	var insertQuery strings.Builder
+	_, err := insertQuery.WriteString(fmt.Sprintf(db.InsertTemplate(), //nolint
+		db.Escape(in.table.Schema),
+		db.Escape(in.table.Name),
+		db.EscapedNamesListFromFields(append(fieldsToGen, fieldsToSample...)),
+	))
+	if err != nil {
+		log.Error().Err(err).Msg("failed to build string")
+	}
+	log.Debug().Str("fieldsToGen", db.EscapedNamesListFromFields(fieldsToGen)).Str("fieldsToSample", db.EscapedNamesListFromFields(fieldsToSample)).Str("table", in.table.Name).Str("schema", in.table.Schema).Msg("genQuery init")
+
+	// TODO obj pool ?
+	// full init of the 2 layer slice
+	values := make([]insertValues, count)
+	for i := range values {
+		values[i] = make(insertValues, len(fieldsToGen)+len(fieldsToSample))
+	}
+
+	var wg sync.WaitGroup
+
+	if len(fieldsToGen) != 0 {
+		wg.Add(1)
+		go func() {
+			for i := int64(0); i < count; i++ {
+				generateFields(fieldsToGen, values[i][:len(fieldsToGen)])
+			}
+			wg.Done()
+		}()
+	}
+
+	if len(fieldsToSample) != 0 {
+		wg.Add(1)
+		go func() {
+
+			// prep a "subslice" of the 2 layer slice
+			// that way each rows (1st layer) only gets the sublice of the fields to sample
+			// it ensures each goroutines work on the main "values" array without overlaps
+			sampledValues := make([]insertValues, count)
+			for i := range sampledValues {
+				sampledValues[i] = values[i][len(fieldsToGen):]
+			}
+			err := in.sampleFields(fieldsToSample, sampledValues)
+			if err != nil {
+				log.Error().Err(err).Msg("error when sampling field")
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+	for row := range values {
+		insertQuery.WriteString(values[row].String())
+		if row != len(values)-1 {
+			insertQuery.WriteString(",")
+		}
+	}
+	s := insertQuery.String()
+	return &s
+}
+
 func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
+
 	if count < 1 {
 		return 0, nil
 	}
-	values := make([]string, 0, count)
-	insertQuery := generateInsertStmt(in.table)
 
-	for i := int64(0); i < count; i++ {
-		valueFns := makeValueFuncs(in.db, in.table.Fields, nil)
-		values = append(values, valueFns.String())
-	}
-
-	insertQuery += strings.Join(values, ",\n")
+	insertQuery := in.genQuery(count)
 
 	if dryRun {
-		if _, err := in.writer.Write([]byte(insertQuery + "\n")); err != nil {
+		if _, err := in.writer.Write([]byte(*insertQuery + "\n")); err != nil {
 			return 0, err
 		}
 		return count, nil
 	}
 
-	res, err := in.db.Exec(insertQuery)
+	res, err := in.db.Exec(*insertQuery)
 	if err != nil {
-		fmt.Println(insertQuery)
+		log.Error().Str("query", *insertQuery).Err(err).Msg("failed to insert")
 		return 0, err
 	}
 	ra, _ := res.RowsAffected()
 	return ra, err
 }
 
-func generateInsertStmt(table *db.Table) string {
-	fields := getFieldNames(table.Fields)
-	query := fmt.Sprintf(db.InsertTemplate(), //nolint
-		db.Escape(table.Schema),
-		db.Escape(table.Name),
-		strings.Join(fields, ","),
-	)
-	return query
-}
-
-func getFieldNames(fields []db.Field) []string {
-	fieldNames := make([]string, 0, len(fields))
-
-	for _, field := range fields {
-		if !isSupportedType(field.DataType) {
-			continue
-		}
-		if !field.IsNullable && field.ColumnKey == "PRI" && field.AutoIncrement {
-			continue
-		}
-		fieldNames = append(fieldNames, db.Escape(field.ColumnName))
-	}
-	return fieldNames
-}
-
-func isSupportedType(fieldType string) bool {
-	supportedTypes := map[string]bool{
-		"tinyint":    true,
-		"smallint":   true,
-		"mediumint":  true,
-		"int":        true,
-		"integer":    true,
-		"bigint":     true,
-		"float":      true,
-		"decimal":    true,
-		"double":     true,
-		"char":       true,
-		"varchar":    true,
-		"date":       true,
-		"datetime":   true,
-		"timestamp":  true,
-		"time":       true,
-		"year":       true,
-		"tinyblob":   true,
-		"tinytext":   true,
-		"blob":       true,
-		"text":       true,
-		"mediumblob": true,
-		"mediumtext": true,
-		"longblob":   true,
-		"longtext":   true,
-		"binary":     true,
-		"varbinary":  true,
-		"enum":       true,
-		"set":        true,
-		"bool":       true,
-		"boolean":    true,
-	}
-	_, ok := supportedTypes[fieldType]
-	return ok
-}
-
-func makeValueFuncs(conn *sql.DB, fields []db.Field, cg map[string]string) insertValues {
-	var values []getters.Getter
-	for _, field := range fields {
-		if !field.IsNullable && field.ColumnKey == "PRI" && field.AutoIncrement {
-			continue
-		}
-		if field.Constraint != nil {
-			samples, err := getSamples(conn, field.Constraint.ReferencedTableSchema,
-				field.Constraint.ReferencedTableName,
-				field.Constraint.ReferencedColumnName,
-				100, field.DataType)
-			if err != nil {
-				log.Printf("cannot get samples for field %q: %s\n", field.ColumnName, err)
-				continue
-			}
-			values = append(values, getters.NewRandomSample(field.ColumnName, samples, field.IsNullable))
-			continue
-		}
-		maxValue := maxValues["bigint"]
-		if m, ok := maxValues[field.DataType]; ok {
-			maxValue = m
-		}
+func generateFields(fields []db.Field, insertValues []getters.Getter) {
+	for colIndex := range insertValues {
+		field := fields[colIndex]
+		var value getters.Getter
 		switch field.DataType {
 		case "tinyint", "bit", "bool", "boolean":
-			values = append(values, getters.NewRandomIntRange(field.ColumnName, 0, 1, field.IsNullable))
+			value = getters.NewRandomIntRange(field.ColumnName, 0, 1, field.IsNullable)
 		case "smallint", "mediumint", "int", "integer", "bigint":
-			values = append(values, getters.NewRandomInt(field.ColumnName, maxValue, field.IsNullable))
+			maxValue := maxValues["bigint"]
+			if m, ok := maxValues[field.DataType]; ok {
+				maxValue = m
+			}
+			value = getters.NewRandomInt(field.ColumnName, maxValue, field.IsNullable)
 		case "float", "decimal", "double", "numeric":
-			values = append(values, getters.NewRandomDecimal(field.ColumnName, field.NumericPrecision.Int64, field.NumericScale.Int64, field.IsNullable))
+			value = getters.NewRandomDecimal(field.ColumnName, field.NumericPrecision.Int64, field.NumericScale.Int64, field.IsNullable)
 		case "char", "varchar":
-			values = append(values, getters.NewRandomString(field.ColumnName,
-				field.CharacterMaximumLength.Int64, field.IsNullable))
+			value = getters.NewRandomString(field.ColumnName, field.CharacterMaximumLength.Int64, field.IsNullable)
 		case "date":
-			values = append(values, getters.NewRandomDate(field.ColumnName, field.IsNullable))
+			value = getters.NewRandomDate(field.ColumnName, field.IsNullable)
 		case "datetime", "timestamp":
-			values = append(values, getters.NewRandomDateTime(field.ColumnName, field.IsNullable))
+			value = getters.NewRandomDateTime(field.ColumnName, field.IsNullable)
 		case "tinyblob", "tinytext", "blob", "text", "mediumtext", "mediumblob", "longblob", "longtext":
-			values = append(values, getters.NewRandomString(field.ColumnName,
-				field.CharacterMaximumLength.Int64, field.IsNullable))
+			value = getters.NewRandomString(field.ColumnName, field.CharacterMaximumLength.Int64, field.IsNullable)
 		case "time":
-			values = append(values, getters.NewRandomTime(field.IsNullable))
+			value = getters.NewRandomTime(field.IsNullable)
 		case "year":
-			values = append(values, getters.NewRandomIntRange(field.ColumnName, int64(time.Now().Year()-1),
-				int64(time.Now().Year()), field.IsNullable))
+			value = getters.NewRandomIntRange(field.ColumnName, int64(time.Now().Year()-1),
+				int64(time.Now().Year()), field.IsNullable)
 		case "enum", "set":
-			values = append(values, getters.NewRandomEnum(field.SetEnumVals, field.IsNullable))
+			value = getters.NewRandomEnum(field.SetEnumVals, field.IsNullable)
 		case "binary", "varbinary":
-			values = append(values, getters.NewRandomBinary(field.ColumnName, field.CharacterMaximumLength.Int64, field.IsNullable))
+			value = getters.NewRandomBinary(field.ColumnName, field.CharacterMaximumLength.Int64, field.IsNullable)
 		default:
-			log.Printf("cannot get field type: %s: %s\n", field.ColumnName, field.DataType)
+			log.Error().Str("type", field.DataType).Str("field", field.ColumnName).Msg("unsupported datatypes when generating fields")
 		}
+		// "value" here is a getter.getter, which means printing it will always generate a new value
+		// TODO so it should be reusing the same generator instead of making struct everytime
+		insertValues[colIndex] = value
 	}
-
-	return values
 }
 
 var storedSampleCount = map[string]int64{}
 
-func getSamples(conn *sql.DB, schema, table, field string, samples int64, dataType string) ([]interface{}, error) {
+func (in *Insert) sampleFields(fields []db.Field, values []insertValues) error {
 	var count int64
 	var query string
 
-	count, ok := storedSampleCount[schema+"#"+table]
+	count, ok := storedSampleCount[in.table.Schema+"#"+in.table.Name]
 	if !ok {
-		queryCount := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s", db.Escape(schema), db.Escape(table))
-		if err := conn.QueryRow(queryCount).Scan(&count); err != nil {
-			return nil, fmt.Errorf("cannot get count for table %q: %s", table, err)
+		queryCount := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s", db.Escape(in.table.Schema), db.Escape(in.table.Name))
+		if err := in.db.QueryRow(queryCount).Scan(&count); err != nil {
+			return fmt.Errorf("cannot get count for table %q: %s", in.table.Name, err)
 		}
-		storedSampleCount[schema+"#"+table] = count
+		storedSampleCount[in.table.Schema+"#"+in.table.Name] = count
 	}
 
-	if count < samples {
-		query = fmt.Sprintf("SELECT %s FROM %s.%s", db.Escape(field), db.Escape(schema), db.Escape(table))
-	} else {
-		query = fmt.Sprintf("SELECT %s FROM %s.%s WHERE RAND() <= .3 LIMIT %d",
-			db.Escape(field), db.Escape(schema), db.Escape(table), samples)
-	}
+	query = fmt.Sprintf("SELECT %s FROM %s.%s WHERE RAND() <= .3 LIMIT %d",
+		db.EscapedNamesListFromFields(fields), db.Escape(in.table.Schema), db.Escape(in.table.Name), len(values))
 
-	rows, err := conn.Query(query)
+	rows, err := in.db.Query(query)
 	if err != nil {
-		return nil, fmt.Errorf("cannot get samples: %s, %s", query, err)
+		return fmt.Errorf("cannot get samples: %s, %s", query, err)
 	}
 	defer rows.Close()
 
-	values := []interface{}{}
-
+	var rowIndex int
 	for rows.Next() {
-		var err error
-		var val interface{}
+		for fieldIndex, field := range fields {
+			var err error
+			var val getters.Getter
 
-		switch dataType {
-		case "tinyint", "smallint", "mediumint", "int", "integer", "bigint", "year":
-			var v int64
-			err = rows.Scan(&v)
-			val = v
-		case "char", "varchar", "blob", "text", "mediumtext",
-			"mediumblob", "longblob", "longtext":
-			var v string
-			err = rows.Scan(&v)
-			val = v
-		case "binary", "varbinary":
-			var v []rune
-			err = rows.Scan(&v)
-			val = v
-		case "float", "decimal", "double":
-			var v float64
-			err = rows.Scan(&v)
-			val = v
-		case "date", "time", "datetime", "timestamp":
-			var v time.Time
-			err = rows.Scan(&v)
-			val = v
+			switch field.DataType {
+			case "tinyint", "smallint", "mediumint", "int", "integer", "bigint", "year":
+				var v int64
+				err = rows.Scan(&v)
+				val = getters.NewScannedInt(v)
+			case "char", "varchar", "blob", "text", "mediumtext",
+				"mediumblob", "longblob", "longtext":
+				var v string
+				err = rows.Scan(&v)
+				val = getters.NewScannedString(v)
+			case "binary", "varbinary":
+				var v []rune
+				err = rows.Scan(&v)
+				val = getters.NewScannedBinary(v)
+			case "float", "decimal", "double":
+				var v float64
+				err = rows.Scan(&v)
+				val = getters.NewScannedDecimal(v)
+			case "date", "time", "datetime", "timestamp":
+				var v time.Time
+				err = rows.Scan(&v)
+				val = getters.NewScannedTime(v)
+			}
+			if err != nil {
+				return fmt.Errorf("cannot scan sample: %s", err)
+			}
+			values[rowIndex][fieldIndex] = val
 		}
-		if err != nil {
-			return nil, fmt.Errorf("cannot scan sample: %s", err)
-		}
-		values = append(values, val)
+		rowIndex = rowIndex + 1
+	}
+	if rowIndex == 0 {
+		return fmt.Errorf("cannot get samples: %s", errors.Errorf("table %s was empty", "TODO"))
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("cannot get samples: %s", err)
+		return fmt.Errorf("cannot get samples: %s", err)
 	}
-	return values, nil
+	return nil
 }

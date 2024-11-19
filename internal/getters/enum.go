@@ -7,21 +7,17 @@ import (
 
 // RandomEnum Getter
 type RandomEnum struct {
-	allowedValues []string
-	allowNull     bool
+	value string
+	null  bool
 }
 
 func (r *RandomEnum) Value() interface{} {
-	if r.allowNull && rand.Int63n(100) < nilFrequency {
-		return nil
-	}
-	i := rand.Int63n(int64(len(r.allowedValues)))
-	return r.allowedValues[i]
+	return r.value
 }
 
 func (r *RandomEnum) String() string {
-	if v := r.Value(); v != nil {
-		return v.(string)
+	if !r.null {
+		return r.value
 	}
 	return "NULL"
 }
@@ -34,5 +30,9 @@ func (r *RandomEnum) Quote() string {
 }
 
 func NewRandomEnum(allowedValues []string, allowNull bool) *RandomEnum {
-	return &RandomEnum{allowedValues, allowNull}
+	if allowNull && rand.Int63n(100) < nilFrequency {
+		return &RandomEnum{"", true}
+	}
+	i := rand.Int63n(int64(len(allowedValues)))
+	return &RandomEnum{allowedValues[i], false}
 }

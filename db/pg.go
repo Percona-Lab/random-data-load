@@ -84,11 +84,39 @@ func (_ Postgres) GetFields(schema, tablename string) ([]Field, error) {
 	return fields, nil
 }
 
-func (_ Postgres) GetConstraints(schema, name string) ([]Constraint, error) {
-	return []Constraint{}, nil
+func (_ Postgres) GetConstraints(schema, tablename string) ([]Constraint, error) {
+	query := `SELECT tc.CONSTRAINT_NAME,
+		kcu.COLUMN_NAME,
+		kcu.REFERENCED_TABLE_SCHEMA,
+		kcu.REFERENCED_TABLE_NAME,
+		kcu.REFERENCED_COLUMN_NAME 
+	FROM information_schema.TABLE_CONSTRAINTS tc 
+	LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu 
+	ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME 
+	WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY' 
+		AND tc.TABLE_SCHEMA = $1
+		AND tc.TABLE_NAME = $2`
+	rows, err := DB.Query(query, schema, tablename)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
 
+	constraints := []Constraint{}
+
+	for rows.Next() {
+		/*var c Constraint
+		err := rows.Scan(&c.ConstraintName, &c.ColumnName, &c.ReferencedTableSchema,
+			&c.ReferencedTableName, &c.ReferencedColumnName)
+		if err != nil {
+			return nil, fmt.Errorf("cannot read constraints: %s", err)
+		}
+		constraints = append(constraints, c)
+		*/
+	}
+
+	return constraints, nil
 }
-
 func (_ Postgres) InsertTemplate() string {
 	return "INSERT INTO %s.%s (%s) VALUES \n"
 }
@@ -97,13 +125,13 @@ func (_ Postgres) Escape(s string) string {
 	return "\"" + s + "\""
 }
 
-func (_ Postgres) SetTableMetadata(database, tablename string) Table {
+func (_ Postgres) SetTableMetadata(table *Table, database, tablename string) {
 	// database is useless for catalogs, it's only used for connection on pg
 	schema := "public"
 	if elems := strings.Split(tablename, "."); len(elems) > 1 {
 		schema = elems[0]
 		tablename = elems[1]
 	}
-	table := Table{Schema: schema, Name: tablename}
-	return table
+	table.Schema = schema
+	table.Name = tablename
 }

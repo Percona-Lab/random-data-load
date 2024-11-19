@@ -25,7 +25,7 @@ type Engine interface {
 	GetConstraints(string, string) ([]Constraint, error)
 	InsertTemplate() string
 	Escape(string) string
-	SetTableMetadata(string, string) Table
+	SetTableMetadata(*Table, string, string)
 }
 
 func Connect(config Config) (*sql.DB, error) {

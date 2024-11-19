@@ -9,32 +9,11 @@ import (
 
 // RandomBinary getter
 type RandomBinary struct {
-	name      string
-	maxSize   int64
-	allowNull bool
+	value *string
 }
 
 func (r *RandomBinary) Value() interface{} {
-	if r.allowNull && rand.Int63n(100) < nilFrequency {
-		return nil
-	}
-	var s string
-	maxSize := uint64(r.maxSize)
-	if maxSize == 0 {
-		maxSize = uint64(rand.Int63n(100))
-	}
-
-	if maxSize <= 10 {
-		s = fake.FirstName()
-	} else if maxSize < 30 {
-		s = fake.FullName()
-	} else {
-		s = fake.Sentence()
-	}
-	if len(s) > int(maxSize) {
-		s = s[:int(maxSize)]
-	}
-	return s
+	return *r.value
 }
 
 func (r *RandomBinary) String() string {
@@ -54,5 +33,24 @@ func (r *RandomBinary) Quote() string {
 }
 
 func NewRandomBinary(name string, maxSize int64, allowNull bool) *RandomBinary {
-	return &RandomBinary{name, maxSize, allowNull}
+	if allowNull && rand.Int63n(100) < nilFrequency {
+		return &RandomBinary{}
+	}
+	var s string
+	//maxSize := uint64(r.maxSize)
+	//if maxSize == 0 {
+	//	maxSize = uint64(rand.Int63n(100))
+	//}
+
+	if maxSize <= 10 {
+		s = fake.FirstName()
+	} else if maxSize < 30 {
+		s = fake.FullName()
+	} else {
+		s = fake.Sentence()
+	}
+	if len(s) > int(maxSize) {
+		s = s[:int(maxSize)]
+	}
+	return &RandomBinary{&s}
 }
