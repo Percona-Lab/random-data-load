@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 
 	"github.com/ylacancellera/random-data-load/db"
@@ -138,9 +137,9 @@ func (in *Insert) genQuery(count int64) *string {
 
 	// TODO obj pool ?
 	// full init of the 2 layer slice
-	values := make([]insertValues, count)
+	values := make([]getters.InsertValues, count)
 	for i := range values {
-		values[i] = make(insertValues, len(fieldsToGen)+len(fieldsToSample))
+		values[i] = make(getters.InsertValues, len(fieldsToGen)+len(fieldsToSample))
 	}
 
 	var wg sync.WaitGroup
@@ -149,7 +148,7 @@ func (in *Insert) genQuery(count int64) *string {
 		wg.Add(1)
 		go func() {
 			for i := int64(0); i < count; i++ {
-				generateFields(fieldsToGen, values[i][:len(fieldsToGen)])
+				generateFieldsRow(fieldsToGen, values[i][:len(fieldsToGen)])
 			}
 			wg.Done()
 		}()
@@ -162,11 +161,11 @@ func (in *Insert) genQuery(count int64) *string {
 			// prep a "subslice" of the 2 layer slice
 			// that way each rows (1st layer) only gets the sublice of the fields to sample
 			// it ensures each goroutines work on the main "values" array without overlaps
-			sampledValues := make([]insertValues, count)
+			sampledValues := make([][]getters.Getter, count)
 			for i := range sampledValues {
 				sampledValues[i] = values[i][len(fieldsToGen):]
 			}
-			err := in.sampleFields(fieldsToSample, sampledValues)
+			err := in.sampleFieldsTable(fieldsToSample, sampledValues)
 			if err != nil {
 				log.Error().Err(err).Msg("error when sampling field")
 			}
@@ -176,6 +175,9 @@ func (in *Insert) genQuery(count int64) *string {
 
 	wg.Wait()
 	for row := range values {
+		if values[row] == nil {
+			continue
+		}
 		insertQuery.WriteString(values[row].String())
 		if row != len(values)-1 {
 			insertQuery.WriteString(",")
@@ -209,7 +211,7 @@ func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
 	return ra, err
 }
 
-func generateFields(fields []db.Field, insertValues []getters.Getter) {
+func generateFieldsRow(fields []db.Field, insertValues []getters.Getter) {
 	for colIndex := range insertValues {
 		field := fields[colIndex]
 		var value getters.Getter
@@ -244,77 +246,28 @@ func generateFields(fields []db.Field, insertValues []getters.Getter) {
 		default:
 			log.Error().Str("type", field.DataType).Str("field", field.ColumnName).Msg("unsupported datatypes when generating fields")
 		}
-		// "value" here is a getter.getter, which means printing it will always generate a new value
-		// TODO so it should be reusing the same generator instead of making struct everytime
 		insertValues[colIndex] = value
 	}
 }
 
-var storedSampleCount = map[string]int64{}
+func (in *Insert) sampleFieldsTable(fields []db.Field, values [][]getters.Getter) error {
 
-func (in *Insert) sampleFields(fields []db.Field, values []insertValues) error {
-	var count int64
-	var query string
-
-	count, ok := storedSampleCount[in.table.Schema+"#"+in.table.Name]
-	if !ok {
-		queryCount := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s", db.Escape(in.table.Schema), db.Escape(in.table.Name))
-		if err := in.db.QueryRow(queryCount).Scan(&count); err != nil {
-			return fmt.Errorf("cannot get count for table %q: %s", in.table.Name, err)
+	/* TODO
+	currenlty sample its own table
+	we need to provide "fields" for parent tables
+	but, it's not using regualr fields struct, so the currect sampler is wrong
+	recursively getting fields could be done, or copy the field and jsut change the name to the correct association
+	probably would be a table func to generate field struct from fields and constraints
+	will also need:
+	- fields order to group fk together + make it work with the general final insert
+	- dedup constraints when multiple col have same constraint
+	*/
+	foreignFields := []db.Field{}
+	for _, field := range fields {
+		if constraint, ok := in.table.ColToConstraint[field.ColumnName]; ok && constraint != nil {
+			//constraint.
 		}
-		storedSampleCount[in.table.Schema+"#"+in.table.Name] = count
 	}
-
-	query = fmt.Sprintf("SELECT %s FROM %s.%s WHERE RAND() <= .3 LIMIT %d",
-		db.EscapedNamesListFromFields(fields), db.Escape(in.table.Schema), db.Escape(in.table.Name), len(values))
-
-	rows, err := in.db.Query(query)
-	if err != nil {
-		return fmt.Errorf("cannot get samples: %s, %s", query, err)
-	}
-	defer rows.Close()
-
-	var rowIndex int
-	for rows.Next() {
-		for fieldIndex, field := range fields {
-			var err error
-			var val getters.Getter
-
-			switch field.DataType {
-			case "tinyint", "smallint", "mediumint", "int", "integer", "bigint", "year":
-				var v int64
-				err = rows.Scan(&v)
-				val = getters.NewScannedInt(v)
-			case "char", "varchar", "blob", "text", "mediumtext",
-				"mediumblob", "longblob", "longtext":
-				var v string
-				err = rows.Scan(&v)
-				val = getters.NewScannedString(v)
-			case "binary", "varbinary":
-				var v []rune
-				err = rows.Scan(&v)
-				val = getters.NewScannedBinary(v)
-			case "float", "decimal", "double":
-				var v float64
-				err = rows.Scan(&v)
-				val = getters.NewScannedDecimal(v)
-			case "date", "time", "datetime", "timestamp":
-				var v time.Time
-				err = rows.Scan(&v)
-				val = getters.NewScannedTime(v)
-			}
-			if err != nil {
-				return fmt.Errorf("cannot scan sample: %s", err)
-			}
-			values[rowIndex][fieldIndex] = val
-		}
-		rowIndex = rowIndex + 1
-	}
-	if rowIndex == 0 {
-		return fmt.Errorf("cannot get samples: %s", errors.Errorf("table %s was empty", "TODO"))
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("cannot get samples: %s", err)
-	}
-	return nil
+	sampler := getters.NewUniformSample(in.db, fields, in.table.Name, in.table.Schema, values)
+	return sampler.Sample()
 }

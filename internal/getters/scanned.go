@@ -23,8 +23,18 @@ func (s *ScannedInt) Quote() string {
 	return s.String()
 }
 
-func NewScannedInt(v int64) *ScannedInt {
-	return &ScannedInt{v}
+func (s *ScannedInt) Scan(src any) (err error) {
+	switch x := src.(type) {
+	case int64:
+		s.value = x
+	default:
+		err = fmt.Errorf("unsupported scan type %T", src)
+	}
+	return
+}
+
+func NewScannedInt() *ScannedInt {
+	return &ScannedInt{}
 }
 
 type ScannedString struct {
@@ -43,8 +53,18 @@ func (s *ScannedString) Quote() string {
 	return db.Escape(s.String())
 }
 
-func NewScannedString(v string) *ScannedString {
-	return &ScannedString{v}
+func (s *ScannedString) Scan(src any) (err error) {
+	switch x := src.(type) {
+	case string:
+		s.value = x
+	default:
+		err = fmt.Errorf("unsupported scan type %T", src)
+	}
+	return
+}
+
+func NewScannedString() *ScannedString {
+	return &ScannedString{}
 }
 
 type ScannedBinary struct {
@@ -63,8 +83,18 @@ func (s *ScannedBinary) Quote() string {
 	return db.Escape(s.String())
 }
 
-func NewScannedBinary(v []rune) *ScannedBinary {
-	return &ScannedBinary{v}
+func (s *ScannedBinary) Scan(src any) (err error) {
+	switch x := src.(type) {
+	case []rune:
+		s.value = x
+	default:
+		err = fmt.Errorf("unsupported scan type %T", src)
+	}
+	return
+}
+
+func NewScannedBinary() *ScannedBinary {
+	return &ScannedBinary{}
 }
 
 type ScannedDecimal struct {
@@ -83,8 +113,18 @@ func (s *ScannedDecimal) Quote() string {
 	return s.String()
 }
 
-func NewScannedDecimal(v float64) *ScannedDecimal {
-	return &ScannedDecimal{v}
+func (s *ScannedDecimal) Scan(src any) (err error) {
+	switch x := src.(type) {
+	case float64:
+		s.value = x
+	default:
+		err = fmt.Errorf("unsupported scan type %T", src)
+	}
+	return
+}
+
+func NewScannedDecimal() *ScannedDecimal {
+	return &ScannedDecimal{}
 }
 
 type ScannedTime struct {
@@ -103,6 +143,16 @@ func (s *ScannedTime) Quote() string {
 	return s.String()
 }
 
-func NewScannedTime(v time.Time) *ScannedTime {
-	return &ScannedTime{v}
+func (s *ScannedTime) Scan(src any) (err error) {
+	switch x := src.(type) {
+	case time.Time:
+		s.value = x
+	default:
+		err = fmt.Errorf("unsupported scan type %T", src)
+	}
+	return
+}
+
+func NewScannedTime() *ScannedTime {
+	return &ScannedTime{}
 }
