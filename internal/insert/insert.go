@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 
 	"github.com/ylacancellera/random-data-load/db"
@@ -252,22 +253,24 @@ func generateFieldsRow(fields []db.Field, insertValues []getters.Getter) {
 
 func (in *Insert) sampleFieldsTable(fields []db.Field, values [][]getters.Getter) error {
 
-	/* TODO
-	currenlty sample its own table
-	we need to provide "fields" for parent tables
-	but, it's not using regualr fields struct, so the currect sampler is wrong
-	recursively getting fields could be done, or copy the field and jsut change the name to the correct association
-	probably would be a table func to generate field struct from fields and constraints
-	will also need:
-	- fields order to group fk together + make it work with the general final insert
-	- dedup constraints when multiple col have same constraint
-	*/
-	foreignFields := []db.Field{}
-	for _, field := range fields {
-		if constraint, ok := in.table.ColToConstraint[field.ColumnName]; ok && constraint != nil {
-			//constraint.
+	colIdx := 0
+
+	var err error
+	for _, constraint := range in.table.Constraints {
+
+		// subslice stores only a few columns grouped together with the FK columns
+		subSlice := make([][]getters.Getter, len(values))
+		for i := range subSlice {
+			subSlice[i] = values[i][colIdx : colIdx+len(constraint.ReferencedFields)]
 		}
+
+		sampler := getters.NewUniformSample(in.db, constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
+		err = sampler.Sample()
+		if err != nil {
+			return errors.Wrap(err, "sampleFieldsTable")
+		}
+		colIdx += len(constraint.ReferencedFields)
+
 	}
-	sampler := getters.NewUniformSample(in.db, fields, in.table.Name, in.table.Schema, values)
-	return sampler.Sample()
+	return nil
 }

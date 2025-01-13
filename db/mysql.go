@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
-	"net/url"
 	"regexp"
 	"strings"
 
@@ -233,9 +232,9 @@ func (_ MySQL) InsertTemplate() string {
 
 func (_ MySQL) Escape(s string) string {
 	if strings.HasPrefix(s, "`") && strings.HasSuffix(s, "`") {
-		return url.QueryEscape(s)
+		return s
 	}
-	return "`" + url.QueryEscape(s) + "`"
+	return "`" + s + "`"
 }
 
 func (_ MySQL) SetTableMetadata(table *Table, database, tablename string) {

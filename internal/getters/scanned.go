@@ -50,13 +50,15 @@ func (s *ScannedString) String() string {
 }
 
 func (s *ScannedString) Quote() string {
-	return db.Escape(s.String())
+	return "'" + s.String() + "'"
 }
 
 func (s *ScannedString) Scan(src any) (err error) {
 	switch x := src.(type) {
 	case string:
 		s.value = x
+	case []uint8:
+		s.value = string(x)
 	default:
 		err = fmt.Errorf("unsupported scan type %T", src)
 	}

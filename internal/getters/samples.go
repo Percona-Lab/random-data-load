@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog/log"
 	"github.com/ylacancellera/random-data-load/db"
 )
 
@@ -27,33 +28,34 @@ func (s *sampleCommon) query(query string, values [][]Getter) error {
 	}
 	defer rows.Close()
 
-	var rowIndex int
-	scannedValuesInterface := make([]interface{}, len(s.fields))
-	scannedGetter := make([]ScannerGetter, len(s.fields))
-	for fieldIndex, field := range s.fields {
-		getter := s.getterFromField(field)
-		scannedGetter[fieldIndex] = getter
-		scannedValuesInterface[fieldIndex] = &getter
-	}
-
+	var rowIdx int
 	for rows.Next() {
+
+		scannedValuesInterface := make([]interface{}, len(s.fields))
+		scannedGetter := make([]ScannerGetter, len(s.fields))
+		for fieldIdx, field := range s.fields {
+			getter := s.getterFromField(field)
+			scannedGetter[fieldIdx] = getter
+			scannedValuesInterface[fieldIdx] = getter
+		}
 		err = rows.Scan(scannedValuesInterface...)
 		if err != nil {
-			return errors.Wrap(err, "failed to scan samples")
+			return errors.Wrapf(err, "failed to scan samples with query %s", query)
 		}
-		for fieldIndex := range s.fields {
-			//getter := scannedValuesInterface[fieldIndex].(getterType)
-			values[rowIndex][fieldIndex] = scannedGetter[fieldIndex]
+		for fieldIdx := range s.fields {
+			values[rowIdx][fieldIdx] = scannedGetter[fieldIdx]
 		}
 
-		rowIndex = rowIndex + 1
+		rowIdx = rowIdx + 1
 	}
-	if rowIndex == 0 {
+
+	if rowIdx == 0 {
 		return fmt.Errorf("cannot get samples: %s", errors.Errorf("table %s was empty", "TODO"))
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("cannot get samples: %s", err)
 	}
+	log.Debug().Str("query", query).Str("tablename", s.table).Str("schema", s.schema).Msg("query")
 	return nil
 }
 
@@ -105,18 +107,18 @@ func (s *UniformSample) Sample() error {
 
 var storedUniformSamples = map[string]*UniformSample{}
 
-func NewUniformSample(db *sql.DB, fields []db.Field, name, schema string, values [][]Getter) *UniformSample {
-	if r, ok := storedUniformSamples[name]; ok {
-		r.values = values
-		return r
+func NewUniformSample(db *sql.DB, fields []db.Field, schema, name string, values [][]Getter) *UniformSample {
+	if s, ok := storedUniformSamples[name]; ok {
+		s.values = values
+		return s
 	}
-	r := &UniformSample{}
-	r.table = name
-	r.schema = schema
-	r.limit = len(values)
-	r.values = values
-	r.db = db
-	r.fields = fields
-	storedUniformSamples[name] = r
-	return r
+	s := &UniformSample{}
+	s.table = name
+	s.schema = schema
+	s.limit = len(values)
+	s.values = values
+	s.db = db
+	s.fields = fields
+	storedUniformSamples[name] = s
+	return s
 }

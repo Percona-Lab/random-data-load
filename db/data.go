@@ -34,6 +34,9 @@ type Constraint struct {
 	ReferencedTableName   string
 	ColumnsName           []string // sorted by ordinal_position
 	ReferencedColumsName  []string
+	Fields                []Field
+	ReferencedFields      []Field
+	ReferencedTable       *Table
 }
 
 // Field holds raw field information as defined in INFORMATION_SCHEMA
@@ -49,7 +52,7 @@ type Field struct {
 	SetEnumVals            []string
 }
 
-func NewTable() *Table {
+func newTable() *Table {
 	var table Table
 	table.ColToConstraint = map[string]*Constraint{}
 	return &table
@@ -66,7 +69,7 @@ func (t *Table) FieldNames() []string {
 
 func LoadTable(database, tablename string) (*Table, error) {
 	var err error
-	table := NewTable()
+	table := newTable()
 	engine.SetTableMetadata(table, database, tablename)
 
 	table.Fields, err = GetFields(table.Schema, table.Name)
@@ -78,18 +81,42 @@ func LoadTable(database, tablename string) (*Table, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "LoadTable")
 	}
-	table.resolveConstraints()
+	//TODO currently not protected against cyclical dependencies
+	err = table.resolveConstraints()
+	if err != nil {
+		return nil, errors.Wrap(err, "resolveConstraints")
+	}
 
-	log.Debug().Strs("fields", table.FieldNames()).Int("lenConstraints", len(table.Constraints)).Msg("loaded table")
+	log.Debug().Strs("fields", table.FieldNames()).Int("lenConstraints", len(table.Constraints)).Str("tablename", table.Name).Str("table schema", table.Schema).Msg("loaded table")
 	return table, nil
 }
 
-func (t *Table) resolveConstraints() {
-	for _, constraint := range t.Constraints {
-		for _, col := range constraint.ColumnsName {
-			t.ColToConstraint[col] = &constraint
+func (t *Table) resolveConstraints() error {
+	var err error
+	for constraintIdx, constraint := range t.Constraints {
+
+		t.Constraints[constraintIdx].ReferencedTable, err = LoadTable(constraint.ReferencedTableSchema, constraint.ReferencedTableName)
+		if err != nil {
+			return errors.Wrap(err, "resolveConstraints recursive loadtable")
+		}
+
+		for colnameIdx, colname := range constraint.ColumnsName {
+
+			t.ColToConstraint[colname] = &constraint
+
+			field := t.FieldByName(colname)
+			if field == nil {
+				return errors.Errorf("could not find column %s from table %s", colname, t.Name)
+			}
+			t.Constraints[constraintIdx].Fields = append(t.Constraints[constraintIdx].Fields, *field)
+			refField := t.Constraints[constraintIdx].ReferencedTable.FieldByName(t.Constraints[constraintIdx].ReferencedColumsName[colnameIdx])
+			if refField == nil {
+				return errors.Errorf("could not find column %s from table %s", t.Constraints[constraintIdx].ReferencedColumsName[colnameIdx], t.Constraints[constraintIdx].ReferencedTable.Name)
+			}
+			t.Constraints[constraintIdx].ReferencedFields = append(t.Constraints[constraintIdx].ReferencedFields, *refField)
 		}
 	}
+	return nil
 }
 
 func (t *Table) FieldByName(name string) *Field {
@@ -119,18 +146,20 @@ func (t *Table) FieldsToGenerate() []Field {
 	return fields
 }
 
+// FieldsToSample points to the fields of the table we are looking to insert to
 func (t *Table) FieldsToSample() []Field {
 	fields := []Field{}
 
-	for _, field := range t.Fields {
-		if _, ok := t.ColToConstraint[field.ColumnName]; !ok {
-			continue
+	for _, constraint := range t.Constraints {
+	ITERATE_FK_COLUMNS:
+		for _, colname := range constraint.ColumnsName {
+			for _, field := range t.Fields {
+				if field.ColumnName == colname {
+					fields = append(fields, field)
+					continue ITERATE_FK_COLUMNS
+				}
+			}
 		}
-		if !isSupportedType(field.DataType) {
-			log.Error().Str("field", field.ColumnName).Str("type", field.DataType).Msg("Unsupported type is part of a foreign key relationship and must be skipped. It may break foreign key links")
-			continue
-		}
-		fields = append(fields, field)
 	}
 	return fields
 }
