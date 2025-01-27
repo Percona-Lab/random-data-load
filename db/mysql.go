@@ -58,7 +58,7 @@ type mySQLIndexField struct {
 	//Clustered string // TiDB Support
 }
 
-func (_ MySQL) GetFields(schema, tablename string) ([]Field, error) {
+func (mysql MySQL) GetFields(schema, tablename string) ([]Field, error) {
 	//                           +--------------------------- field type
 	//                           |          +---------------- field size / enum values: decimal(10,2) or enum('a','b')
 	//                           |          |     +---------- extra info (unsigned, etc)
@@ -97,7 +97,7 @@ func (_ MySQL) GetFields(schema, tablename string) ([]Field, error) {
 
 		var f Field
 		var allowNull, columnType string
-		scanRecipients := makeScanRecipients(&f, &allowNull, &columnType, cols)
+		scanRecipients := mysql.makeScanRecipients(&f, &allowNull, &columnType, cols)
 		err := rows.Scan(scanRecipients...)
 		if err != nil {
 			log.Error().Err(err).Msg("cannot get fields")
@@ -131,7 +131,7 @@ func (_ MySQL) GetFields(schema, tablename string) ([]Field, error) {
 	return fields, nil
 }
 
-func makeScanRecipients(f *Field, allowNull, columnType *string, cols []string) []interface{} {
+func (_ MySQL) makeScanRecipients(f *Field, allowNull, columnType *string, cols []string) []interface{} {
 	fields := []interface{}{
 		&f.ColumnName,
 		&allowNull,

@@ -7,6 +7,7 @@ import (
 
 	_ "github.com/lib/pq"
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog/log"
 )
 
 var postgresTypeMapping = map[string]string{
@@ -39,14 +40,16 @@ SELECT
 	ORDER BY attnum;
 
 */
-func (_ Postgres) GetFields(schema, tablename string) ([]Field, error) {
+func (postgres Postgres) GetFields(schema, tablename string) ([]Field, error) {
 	query := `SELECT
 		column_name, 
 		is_nullable::boolean, 
 		data_type, 
 		character_maximum_length, 
 		numeric_precision, 
-		numeric_scale 
+		numeric_scale, 
+		CASE WHEN is_identity='YES' THEN 'PRI' else '' END,
+		CASE WHEN identity_generation='ALWAYS' THEN true else false END
 	FROM information_schema.columns
 	WHERE table_schema=$1 AND table_name=$2`
 
@@ -56,20 +59,27 @@ func (_ Postgres) GetFields(schema, tablename string) ([]Field, error) {
 	}
 	defer rows.Close()
 
+	cols, err := rows.Columns()
+	if err != nil {
+		return []Field{}, errors.Wrap(err, "Cannot get column names")
+	}
+
 	fields := []Field{}
 	for rows.Next() {
 		var f Field
-		toScan := []interface{}{
+		/*toScan := []interface{}{
 			&f.ColumnName,
 			&f.IsNullable,
 			&f.DataType,
 			&f.CharacterMaximumLength,
 			&f.NumericPrecision,
 			&f.NumericScale,
-		}
-		err = rows.Scan(toScan...)
+		}*/
+		var columnType string
+		scanRecipients := postgres.makeScanRecipients(&f, &columnType, cols)
+		err := rows.Scan(scanRecipients...)
 		if err != nil {
-			// TODO: just mimicked mysql counterpart
+			log.Error().Err(err).Msg("cannot get fields")
 			continue
 		}
 
@@ -84,35 +94,61 @@ func (_ Postgres) GetFields(schema, tablename string) ([]Field, error) {
 	return fields, nil
 }
 
+func (_ Postgres) makeScanRecipients(f *Field, columnType *string, cols []string) []interface{} {
+	fields := []interface{}{
+		&f.ColumnName,
+		&f.IsNullable,
+		&f.DataType,
+		&f.CharacterMaximumLength,
+		//&f.CharacterOctetLength,
+		&f.NumericPrecision,
+		&f.NumericScale,
+		//&columnType,
+		&f.ColumnKey,
+		&f.AutoIncrement,
+	}
+
+	return fields
+}
+
 func (_ Postgres) GetConstraints(schema, tablename string) ([]Constraint, error) {
-	query := `SELECT tc.CONSTRAINT_NAME,
-		kcu.COLUMN_NAME,
-		kcu.REFERENCED_TABLE_SCHEMA,
-		kcu.REFERENCED_TABLE_NAME,
-		kcu.REFERENCED_COLUMN_NAME 
-	FROM information_schema.TABLE_CONSTRAINTS tc 
-	LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu 
-	ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME 
-	WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY' 
-		AND tc.TABLE_SCHEMA = $1
-		AND tc.TABLE_NAME = $2`
+	query := `
+SELECT c.constraint_name, 
+	y.table_schema as referenced_schema_name, 
+	y.table_name as refereneced_table_name, 
+	string_agg(y.column_name, ';' ORDER BY x.ordinal_position) as referenced_column_names, 
+	string_agg(x.column_name, ';' ORDER BY x.ordinal_position) as column_names
+FROM information_schema.referential_constraints c
+JOIN information_schema.key_column_usage x
+	ON x.constraint_name = c.constraint_name
+JOIN information_schema.key_column_usage y
+    ON y.ordinal_position = x.position_in_unique_constraint
+    AND y.constraint_name = c.unique_constraint_name
+WHERE x.table_schema = $1 
+	AND x.table_name = $2
+GROUP BY 1,2,3
+ORDER BY c.constraint_name;
+		`
 	rows, err := DB.Query(query, schema, tablename)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "get constraints, query: %s, schema: %s, table: %s", query, schema, tablename)
 	}
 	defer rows.Close()
 
 	constraints := []Constraint{}
 
 	for rows.Next() {
-		/*var c Constraint
-		err := rows.Scan(&c.ConstraintName, &c.ColumnName, &c.ReferencedTableSchema,
-			&c.ReferencedTableName, &c.ReferencedColumnName)
+		var c Constraint
+		var columnsNameAgg, refColumnsNameAgg string
+		err := rows.Scan(&c.ConstraintName, &c.ReferencedTableSchema,
+			&c.ReferencedTableName, &refColumnsNameAgg, &columnsNameAgg)
 		if err != nil {
 			return nil, fmt.Errorf("cannot read constraints: %s", err)
 		}
+		c.ColumnsName = strings.Split(columnsNameAgg, ";")
+		c.ReferencedColumsName = strings.Split(refColumnsNameAgg, ";")
 		constraints = append(constraints, c)
-		*/
+
 	}
 
 	return constraints, nil
