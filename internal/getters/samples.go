@@ -86,18 +86,6 @@ type UniformSample struct {
 
 func (s *UniformSample) Sample() error {
 
-	//var count int64
-	//var query string
-
-	//count, ok := storedSampleCount[in.table.Schema+"#"+in.table.Name]
-	//if !ok {
-	//	queryCount := fmt.Sprintf("SELECT COUNT(*) FROM %s.%s", db.Escape(in.table.Schema), db.Escape(in.table.Name))
-	//	if err := in.db.QueryRow(queryCount).Scan(&count); err != nil {
-	//		return fmt.Errorf("cannot get count for table %q: %s", in.table.Name, err)
-	//	}
-	//	storedSampleCount[in.table.Schema+"#"+in.table.Name] = count
-	//}
-
 	query := fmt.Sprintf("SELECT %s FROM %s.%s LIMIT %d OFFSET %d",
 		db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table), s.limit, s.lastOffset)
 
@@ -120,5 +108,30 @@ func NewUniformSample(db *sql.DB, fields []db.Field, schema, name string, values
 	s.db = db
 	s.fields = fields
 	storedUniformSamples[name] = s
+	return s
+}
+
+type RandomSample struct {
+	sampleCommon
+	values [][]Getter
+	limit  int
+}
+
+func (s *RandomSample) Sample() error {
+
+	query := fmt.Sprintf("SELECT %s FROM %s.%s TABLESAMPLE BERNOULLI (10) LIMIT %d",
+		db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table), s.limit)
+
+	return s.query(query, s.values)
+}
+
+func NewRandomSample(db *sql.DB, fields []db.Field, schema, name string, values [][]Getter) *RandomSample {
+	s := &RandomSample{}
+	s.table = name
+	s.schema = schema
+	s.limit = len(values)
+	s.values = values
+	s.db = db
+	s.fields = fields
 	return s
 }

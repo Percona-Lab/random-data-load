@@ -264,7 +264,7 @@ func (in *Insert) sampleFieldsTable(fields []db.Field, values [][]getters.Getter
 			subSlice[i] = values[i][colIdx : colIdx+len(constraint.ReferencedFields)]
 		}
 
-		sampler := getters.NewUniformSample(in.db, constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
+		sampler := getters.NewRandomSample(in.db, constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
 		err = sampler.Sample()
 		if err != nil {
 			return errors.Wrap(err, "sampleFieldsTable")

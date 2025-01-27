@@ -2,3 +2,4 @@ random-data-load*
 vendor/
 bin/*
 dist/*
+*.swp
