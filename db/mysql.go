@@ -92,8 +92,10 @@ func (mysql MySQL) GetFields(schema, tablename string) ([]Field, error) {
 	}
 
 	var fields = []Field{}
+	var found bool
 
 	for rows.Next() {
+		found = true
 
 		var f Field
 		var allowNull, columnType string
@@ -128,6 +130,10 @@ func (mysql MySQL) GetFields(schema, tablename string) ([]Field, error) {
 	if rows.Err() != nil {
 		return []Field{}, rows.Err()
 	}
+
+	if !found {
+		return []Field{}, errors.New("fields not found")
+	}
 	return fields, nil
 }
 
@@ -146,49 +152,6 @@ func (_ MySQL) makeScanRecipients(f *Field, allowNull, columnType *string, cols 
 
 	return fields
 }
-
-/*
-func (_ MySQL) GetIndexes(schema, tableName string) (map[string]Index, error) {
-	query := fmt.Sprintf("SHOW INDEXES FROM `%s`.`%s`", schema, tableName)
-	rows, err := DB.Query(query)
-	if err != nil {
-		return nil, err
-	}
-
-	indexes := make(map[string]Index)
-
-	for rows.Next() {
-		var i mySQLIndexField
-		var table string
-		fields := []interface{}{&table, &i.NonUnique, &i.KeyName, &i.SeqInIndex,
-			&i.ColumnName, &i.Collation, &i.Cardinality, &i.Null, &i.IndexType,
-			&i.Comment, &i.IndexComment,
-		}
-
-		err = rows.Scan(fields...)
-		if err != nil {
-			return nil, fmt.Errorf("cannot read indexes: %s", err)
-		}
-		if index, ok := indexes[i.KeyName]; !ok {
-			indexes[i.KeyName] = Index{
-				Name:     i.KeyName,
-				IsUnique: !i.NonUnique,
-				Fields:   []string{i.ColumnName},
-			}
-
-		} else {
-			index.Fields = append(index.Fields, i.ColumnName)
-			index.IsUnique = index.IsUnique || !i.NonUnique
-		}
-	}
-	if err := rows.Close(); err != nil {
-		return nil, errors.Wrap(err, "Cannot close query rows at getIndexes")
-	}
-
-	return indexes, nil
-}
-*/
-
 func (_ MySQL) GetConstraints(schema, tableName string) ([]Constraint, error) {
 	query := `SELECT tc.CONSTRAINT_NAME,
 		kcu.REFERENCED_TABLE_SCHEMA,

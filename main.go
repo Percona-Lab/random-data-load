@@ -8,6 +8,7 @@ import (
 	_ "net/http/pprof"
 
 	"github.com/alecthomas/kong"
+	"github.com/rs/zerolog"
 	"github.com/ylacancellera/random-data-load/cmd"
 )
 
@@ -29,6 +30,7 @@ var cli struct {
 	Version     kong.VersionFlag
 	Profile     bool   `name:"pprof"`
 	CPUProfPath string `name:"cpu-prof-path" default:"cpu.prof"`
+	Debug       bool   `name:"debug"`
 }
 
 func main() {
@@ -45,6 +47,10 @@ func main() {
 			Tree:    true,
 		}),
 	)
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
+	if cli.Debug {
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	}
 
 	if cli.Profile {
 		f, err := os.Create(cli.CPUProfPath)

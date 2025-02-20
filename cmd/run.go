@@ -18,6 +18,8 @@ type RunCmd struct {
 	BulkSize int64 `name:"bulk-size" help:"Number of rows per insert statement" default:"1000"`
 	DryRun   bool  `name:"dry-run" help:"Print queries to the standard output instead of inserting them into the db"`
 	Quiet    bool  `name:"quiet" help:"Do not print progress bar"`
+
+	insert.ForeignKeyLinks
 }
 
 // Run starts inserting data.
@@ -37,7 +39,7 @@ func (cmd *RunCmd) Run() error {
 }
 
 func (cmd *RunCmd) run(table *db.Table) (int64, error) {
-	ins := insert.New(db.DB, table)
+	ins := insert.New(db.DB, table, cmd.ForeignKeyLinks)
 	wg := &sync.WaitGroup{}
 
 	if !cmd.Quiet && !cmd.DryRun {

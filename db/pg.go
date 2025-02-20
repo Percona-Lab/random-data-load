@@ -25,21 +25,6 @@ func (_ Postgres) Connect(dbInfo Config) (*sql.DB, error) {
 	return sql.Open("postgres", fmt.Sprintf("user=%s dbname=%s password=%s sslmode=disable host=%s port=%d ", dbInfo.User, dbInfo.Database, dbInfo.Password, dbInfo.Host, dbInfo.Port))
 }
 
-/*
-SELECT
-		pg_attribute.attname,
-		pg_attribute.attnotnull,
-		pg_type.typname,
-		pg_catalog.format_type(pg_attribute.atttypid, pg_attribute.atttypmod),
-
-	FROM pg_class
-	JOIN pg_attribute ON pg_class.oid = pg_attribute.attrelid
-	JOIN pg_type ON pg_type.oid = pg_attribute.atttypid
-	JOIN pg_namespace ON pg_class.relnamespace=pg_namespace.oid
-	WHERE pg_namespace.nspname='$1' AND relname='$2' AND attnum > 0
-	ORDER BY attnum;
-
-*/
 func (postgres Postgres) GetFields(schema, tablename string) ([]Field, error) {
 	query := `SELECT
 		column_name, 
@@ -64,17 +49,12 @@ func (postgres Postgres) GetFields(schema, tablename string) ([]Field, error) {
 		return []Field{}, errors.Wrap(err, "Cannot get column names")
 	}
 
+	var found bool
 	fields := []Field{}
 	for rows.Next() {
+		found = true
 		var f Field
-		/*toScan := []interface{}{
-			&f.ColumnName,
-			&f.IsNullable,
-			&f.DataType,
-			&f.CharacterMaximumLength,
-			&f.NumericPrecision,
-			&f.NumericScale,
-		}*/
+
 		var columnType string
 		scanRecipients := postgres.makeScanRecipients(&f, &columnType, cols)
 		err := rows.Scan(scanRecipients...)
@@ -90,6 +70,9 @@ func (postgres Postgres) GetFields(schema, tablename string) ([]Field, error) {
 	}
 	if err = rows.Err(); err != nil {
 		return []Field{}, err
+	}
+	if !found {
+		return []Field{}, errors.New("fields not found")
 	}
 	return fields, nil
 }

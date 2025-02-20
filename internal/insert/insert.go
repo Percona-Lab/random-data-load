@@ -21,6 +21,13 @@ type Insert struct {
 	table      *db.Table
 	writer     io.Writer
 	notifyChan chan int64
+	fklinks    ForeignKeyLinks
+}
+
+type ForeignKeyLinks struct {
+	DefaultRelationship string            `name:"default-relationship" enum:"random-1-n,1-1" default:"random-1-n"`
+	RandomOneToMany     map[string]string `name:"random-1-n" help:"foreignkey links to 1-N relationships using postgres' tablesamples Bernouilli random. E.g: --random-1-n=\"customers=orders;orders=items\""`
+	OneToOne            map[string]string `name:"1-1" help:"Override foreignkey links to 1-1 relationships. E.g: --1-1=\"citizens=ssns\""`
 }
 
 var (
@@ -38,11 +45,12 @@ var (
 )
 
 // New returns a new Insert instance.
-func New(db *sql.DB, table *db.Table) *Insert {
+func New(db *sql.DB, table *db.Table, fklinks ForeignKeyLinks) *Insert {
 	return &Insert{
-		db:     db,
-		table:  table,
-		writer: os.Stdout,
+		db:      db,
+		table:   table,
+		writer:  os.Stdout,
+		fklinks: fklinks,
 	}
 }
 
@@ -264,7 +272,8 @@ func (in *Insert) sampleFieldsTable(fields []db.Field, values [][]getters.Getter
 			subSlice[i] = values[i][colIdx : colIdx+len(constraint.ReferencedFields)]
 		}
 
-		sampler := getters.NewRandomSample(in.db, constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
+		fklink := in.fklinks.relationship(in.table.Name, constraint.ReferencedTableName)
+		sampler := in.createSamplerFromForeignkeyLinks(fklink, constraint, subSlice)
 		err = sampler.Sample()
 		if err != nil {
 			return errors.Wrap(err, "sampleFieldsTable")
@@ -273,4 +282,29 @@ func (in *Insert) sampleFieldsTable(fields []db.Field, values [][]getters.Getter
 
 	}
 	return nil
+}
+
+func (r ForeignKeyLinks) relationship(tableName, refTableName string) string {
+	if r.OneToOne[tableName] == refTableName {
+		return "1-1"
+	}
+	if r.RandomOneToMany[tableName] == refTableName {
+		return "random-1-n"
+	}
+	return r.DefaultRelationship
+}
+
+// not fancy, but could not find a normal solution to interface the "getters.sampler" together in a way like
+//
+// var fkLinkToSamplerCreator = map[string]func(*sql.DB, []db.Field, string, string, [][]getters.Getter) getters.Sampler{
+//	"1-1": getters.NewRandomSample,
+// }
+func (in *Insert) createSamplerFromForeignkeyLinks(fklink string, constraint db.Constraint, subSlice [][]getters.Getter) getters.Sampler {
+	switch fklink {
+	case "1-1":
+		return getters.NewUniformSample(in.db, constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
+	case "random-1-n":
+		return getters.NewRandomSample(in.db, constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
+	}
+	return getters.NewRandomSample(in.db, constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
 }
