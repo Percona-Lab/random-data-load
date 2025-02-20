@@ -1,4 +1,4 @@
-package getters
+package generate
 
 func NewRandomYear(name string, format int, allowNull bool) *RandomIntRange {
 	if format == 2 {

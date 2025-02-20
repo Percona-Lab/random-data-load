@@ -3,3 +3,5 @@ vendor/
 bin/*
 dist/*
 *.swp
+*.prof
+*.svg

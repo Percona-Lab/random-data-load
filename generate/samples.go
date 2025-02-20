@@ -1,7 +1,6 @@
-package getters
+package generate
 
 import (
-	"database/sql"
 	"fmt"
 
 	"github.com/pkg/errors"
@@ -17,12 +16,11 @@ type sampleCommon struct {
 	schema string
 	table  string
 	fields []db.Field
-	db     *sql.DB
 }
 
 func (s *sampleCommon) query(query string, values [][]Getter) error {
 
-	rows, err := s.db.Query(query)
+	rows, err := db.DB.Query(query)
 	if err != nil {
 		return fmt.Errorf("cannot get samples: %s, %s", query, err)
 	}
@@ -95,7 +93,7 @@ func (s *UniformSample) Sample() error {
 
 var storedUniformSamples = map[string]*UniformSample{}
 
-func NewUniformSample(db *sql.DB, fields []db.Field, schema, name string, values [][]Getter) *UniformSample {
+func NewUniformSample(fields []db.Field, schema, name string, values [][]Getter) *UniformSample {
 	if s, ok := storedUniformSamples[name]; ok {
 		s.values = values
 		return s
@@ -105,7 +103,6 @@ func NewUniformSample(db *sql.DB, fields []db.Field, schema, name string, values
 	s.schema = schema
 	s.limit = len(values)
 	s.values = values
-	s.db = db
 	s.fields = fields
 	storedUniformSamples[name] = s
 	return s
@@ -125,13 +122,12 @@ func (s *RandomSample) Sample() error {
 	return s.query(query, s.values)
 }
 
-func NewRandomSample(db *sql.DB, fields []db.Field, schema, name string, values [][]Getter) *RandomSample {
+func NewRandomSample(fields []db.Field, schema, name string, values [][]Getter) *RandomSample {
 	s := &RandomSample{}
 	s.table = name
 	s.schema = schema
 	s.limit = len(values)
 	s.values = values
-	s.db = db
 	s.fields = fields
 	return s
 }

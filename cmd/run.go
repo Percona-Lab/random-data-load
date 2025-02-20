@@ -7,7 +7,7 @@ import (
 
 	"github.com/apoorvam/goterminal"
 	"github.com/ylacancellera/random-data-load/db"
-	"github.com/ylacancellera/random-data-load/internal/insert"
+	"github.com/ylacancellera/random-data-load/generate"
 )
 
 type RunCmd struct {
@@ -19,7 +19,7 @@ type RunCmd struct {
 	DryRun   bool  `name:"dry-run" help:"Print queries to the standard output instead of inserting them into the db"`
 	Quiet    bool  `name:"quiet" help:"Do not print progress bar"`
 
-	insert.ForeignKeyLinks
+	generate.ForeignKeyLinks
 }
 
 // Run starts inserting data.
@@ -39,7 +39,7 @@ func (cmd *RunCmd) Run() error {
 }
 
 func (cmd *RunCmd) run(table *db.Table) (int64, error) {
-	ins := insert.New(db.DB, table, cmd.ForeignKeyLinks)
+	ins := generate.New(table, cmd.ForeignKeyLinks)
 	wg := &sync.WaitGroup{}
 
 	if !cmd.Quiet && !cmd.DryRun {

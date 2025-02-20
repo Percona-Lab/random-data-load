@@ -1,7 +1,6 @@
-package insert
+package generate
 
 import (
-	"database/sql"
 	"fmt"
 	"io"
 	"os"
@@ -13,11 +12,9 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/ylacancellera/random-data-load/db"
-	"github.com/ylacancellera/random-data-load/internal/getters"
 )
 
 type Insert struct {
-	db         *sql.DB
 	table      *db.Table
 	writer     io.Writer
 	notifyChan chan int64
@@ -45,9 +42,8 @@ var (
 )
 
 // New returns a new Insert instance.
-func New(db *sql.DB, table *db.Table, fklinks ForeignKeyLinks) *Insert {
+func New(table *db.Table, fklinks ForeignKeyLinks) *Insert {
 	return &Insert{
-		db:      db,
 		table:   table,
 		writer:  os.Stdout,
 		fklinks: fklinks,
@@ -146,9 +142,9 @@ func (in *Insert) genQuery(count int64) *string {
 
 	// TODO obj pool ?
 	// full init of the 2 layer slice
-	values := make([]getters.InsertValues, count)
+	values := make([]InsertValues, count)
 	for i := range values {
-		values[i] = make(getters.InsertValues, len(fieldsToGen)+len(fieldsToSample))
+		values[i] = make(InsertValues, len(fieldsToGen)+len(fieldsToSample))
 	}
 
 	var wg sync.WaitGroup
@@ -170,7 +166,7 @@ func (in *Insert) genQuery(count int64) *string {
 			// prep a "subslice" of the 2 layer slice
 			// that way each rows (1st layer) only gets the sublice of the fields to sample
 			// it ensures each goroutines work on the main "values" array without overlaps
-			sampledValues := make([][]getters.Getter, count)
+			sampledValues := make([][]Getter, count)
 			for i := range sampledValues {
 				sampledValues[i] = values[i][len(fieldsToGen):]
 			}
@@ -211,7 +207,7 @@ func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
 		return count, nil
 	}
 
-	res, err := in.db.Exec(*insertQuery)
+	res, err := db.DB.Exec(*insertQuery)
 	if err != nil {
 		log.Error().Str("query", *insertQuery).Err(err).Msg("failed to insert")
 		return 0, err
@@ -220,38 +216,38 @@ func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
 	return ra, err
 }
 
-func generateFieldsRow(fields []db.Field, insertValues []getters.Getter) {
+func generateFieldsRow(fields []db.Field, insertValues []Getter) {
 	for colIndex := range insertValues {
 		field := fields[colIndex]
-		var value getters.Getter
+		var value Getter
 		switch field.DataType {
 		case "tinyint", "bit", "bool", "boolean":
-			value = getters.NewRandomIntRange(field.ColumnName, 0, 1, field.IsNullable)
+			value = NewRandomIntRange(field.ColumnName, 0, 1, field.IsNullable)
 		case "smallint", "mediumint", "int", "integer", "bigint":
 			maxValue := maxValues["bigint"]
 			if m, ok := maxValues[field.DataType]; ok {
 				maxValue = m
 			}
-			value = getters.NewRandomInt(field.ColumnName, maxValue, field.IsNullable)
+			value = NewRandomInt(field.ColumnName, maxValue, field.IsNullable)
 		case "float", "decimal", "double", "numeric":
-			value = getters.NewRandomDecimal(field.ColumnName, field.NumericPrecision.Int64, field.NumericScale.Int64, field.IsNullable)
+			value = NewRandomDecimal(field.ColumnName, field.NumericPrecision.Int64, field.NumericScale.Int64, field.IsNullable)
 		case "char", "varchar":
-			value = getters.NewRandomString(field.ColumnName, field.CharacterMaximumLength.Int64, field.IsNullable)
+			value = NewRandomString(field.ColumnName, field.CharacterMaximumLength.Int64, field.IsNullable)
 		case "date":
-			value = getters.NewRandomDate(field.ColumnName, field.IsNullable)
+			value = NewRandomDate(field.ColumnName, field.IsNullable)
 		case "datetime", "timestamp":
-			value = getters.NewRandomDateTime(field.ColumnName, field.IsNullable)
+			value = NewRandomDateTime(field.ColumnName, field.IsNullable)
 		case "tinyblob", "tinytext", "blob", "text", "mediumtext", "mediumblob", "longblob", "longtext":
-			value = getters.NewRandomString(field.ColumnName, field.CharacterMaximumLength.Int64, field.IsNullable)
+			value = NewRandomString(field.ColumnName, field.CharacterMaximumLength.Int64, field.IsNullable)
 		case "time":
-			value = getters.NewRandomTime(field.IsNullable)
+			value = NewRandomTime(field.IsNullable)
 		case "year":
-			value = getters.NewRandomIntRange(field.ColumnName, int64(time.Now().Year()-1),
+			value = NewRandomIntRange(field.ColumnName, int64(time.Now().Year()-1),
 				int64(time.Now().Year()), field.IsNullable)
 		case "enum", "set":
-			value = getters.NewRandomEnum(field.SetEnumVals, field.IsNullable)
+			value = NewRandomEnum(field.SetEnumVals, field.IsNullable)
 		case "binary", "varbinary":
-			value = getters.NewRandomBinary(field.ColumnName, field.CharacterMaximumLength.Int64, field.IsNullable)
+			value = NewRandomBinary(field.ColumnName, field.CharacterMaximumLength.Int64, field.IsNullable)
 		default:
 			log.Error().Str("type", field.DataType).Str("field", field.ColumnName).Msg("unsupported datatypes when generating fields")
 		}
@@ -259,7 +255,7 @@ func generateFieldsRow(fields []db.Field, insertValues []getters.Getter) {
 	}
 }
 
-func (in *Insert) sampleFieldsTable(fields []db.Field, values [][]getters.Getter) error {
+func (in *Insert) sampleFieldsTable(fields []db.Field, values [][]Getter) error {
 
 	colIdx := 0
 
@@ -267,7 +263,7 @@ func (in *Insert) sampleFieldsTable(fields []db.Field, values [][]getters.Getter
 	for _, constraint := range in.table.Constraints {
 
 		// subslice stores only a few columns grouped together with the FK columns
-		subSlice := make([][]getters.Getter, len(values))
+		subSlice := make([][]Getter, len(values))
 		for i := range subSlice {
 			subSlice[i] = values[i][colIdx : colIdx+len(constraint.ReferencedFields)]
 		}
@@ -294,17 +290,17 @@ func (r ForeignKeyLinks) relationship(tableName, refTableName string) string {
 	return r.DefaultRelationship
 }
 
-// not fancy, but could not find a normal solution to interface the "getters.sampler" together in a way like
+// not fancy, but could not find a normal solution to interface the "sampler" together in a way like
 //
-// var fkLinkToSamplerCreator = map[string]func(*sql.DB, []db.Field, string, string, [][]getters.Getter) getters.Sampler{
-//	"1-1": getters.NewRandomSample,
+// var fkLinkToSamplerCreator = map[string]func([]db.Field, string, string, [][]Getter) Sampler{
+//	"1-1": NewRandomSample,
 // }
-func (in *Insert) createSamplerFromForeignkeyLinks(fklink string, constraint db.Constraint, subSlice [][]getters.Getter) getters.Sampler {
+func (in *Insert) createSamplerFromForeignkeyLinks(fklink string, constraint db.Constraint, subSlice [][]Getter) Sampler {
 	switch fklink {
 	case "1-1":
-		return getters.NewUniformSample(in.db, constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
+		return NewUniformSample(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
 	case "random-1-n":
-		return getters.NewRandomSample(in.db, constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
+		return NewRandomSample(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
 	}
-	return getters.NewRandomSample(in.db, constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
+	return NewRandomSample(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
 }

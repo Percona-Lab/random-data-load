@@ -1,4 +1,4 @@
-package getters
+package generate
 
 import (
 	"database/sql"
