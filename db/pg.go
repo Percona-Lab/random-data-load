@@ -154,3 +154,7 @@ func (_ Postgres) SetTableMetadata(table *Table, database, tablename string) {
 	table.Schema = schema
 	table.Name = tablename
 }
+
+func (_ Postgres) DBRandomWhereClause() string {
+	return "TABLESAMPLE BERNOULLI (10)"
+}

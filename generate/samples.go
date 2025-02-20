@@ -108,22 +108,22 @@ func NewUniformSample(fields []db.Field, schema, name string, values [][]Getter)
 	return s
 }
 
-type RandomSample struct {
+type DBRandomSample struct {
 	sampleCommon
 	values [][]Getter
 	limit  int
 }
 
-func (s *RandomSample) Sample() error {
+func (s *DBRandomSample) Sample() error {
 
-	query := fmt.Sprintf("SELECT %s FROM %s.%s TABLESAMPLE BERNOULLI (10) LIMIT %d",
-		db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table), s.limit)
+	query := fmt.Sprintf("SELECT %s FROM %s.%s %s LIMIT %d",
+		db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table), db.DBRandomWhereClause(), s.limit)
 
 	return s.query(query, s.values)
 }
 
-func NewRandomSample(fields []db.Field, schema, name string, values [][]Getter) *RandomSample {
-	s := &RandomSample{}
+func NewDBRandomSample(fields []db.Field, schema, name string, values [][]Getter) *DBRandomSample {
+	s := &DBRandomSample{}
 	s.table = name
 	s.schema = schema
 	s.limit = len(values)

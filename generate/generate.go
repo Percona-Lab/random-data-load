@@ -23,7 +23,7 @@ type Insert struct {
 
 type ForeignKeyLinks struct {
 	DefaultRelationship string            `name:"default-relationship" enum:"random-1-n,1-1" default:"random-1-n"`
-	RandomOneToMany     map[string]string `name:"random-1-n" help:"foreignkey links to 1-N relationships using postgres' tablesamples Bernouilli random. E.g: --random-1-n=\"customers=orders;orders=items\""`
+	DBRandomOneToMany   map[string]string `name:"db-random-1-n" help:"foreignkey links to 1-N relationships using postgres' tablesamples Bernouilli random or mysql RAND() < 0.1. E.g: --random-1-n=\"customers=orders;orders=items\""`
 	OneToOne            map[string]string `name:"1-1" help:"Override foreignkey links to 1-1 relationships. E.g: --1-1=\"citizens=ssns\""`
 }
 
@@ -284,8 +284,8 @@ func (r ForeignKeyLinks) relationship(tableName, refTableName string) string {
 	if r.OneToOne[tableName] == refTableName {
 		return "1-1"
 	}
-	if r.RandomOneToMany[tableName] == refTableName {
-		return "random-1-n"
+	if r.DBRandomOneToMany[tableName] == refTableName {
+		return "db-random-1-n"
 	}
 	return r.DefaultRelationship
 }
@@ -299,8 +299,8 @@ func (in *Insert) createSamplerFromForeignkeyLinks(fklink string, constraint db.
 	switch fklink {
 	case "1-1":
 		return NewUniformSample(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
-	case "random-1-n":
-		return NewRandomSample(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
+	case "db-random-1-n":
+		return NewDBRandomSample(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
 	}
-	return NewRandomSample(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
+	return NewDBRandomSample(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
 }

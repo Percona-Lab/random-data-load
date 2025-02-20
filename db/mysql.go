@@ -204,3 +204,7 @@ func (_ MySQL) SetTableMetadata(table *Table, database, tablename string) {
 	table.Schema = database
 	table.Name = tablename
 }
+
+func (_ MySQL) DBRandomWhereClause() string {
+	return "WHERE rand() < 0.1"
+}

@@ -26,6 +26,7 @@ type Engine interface {
 	InsertTemplate() string
 	Escape(string) string
 	SetTableMetadata(*Table, string, string)
+	DBRandomWhereClause() string
 }
 
 func Connect(config Config) (*sql.DB, error) {
@@ -64,4 +65,8 @@ func InsertTemplate() string {
 
 func Escape(s string) string {
 	return engine.Escape(s)
+}
+
+func DBRandomWhereClause() string {
+	return engine.DBRandomWhereClause()
 }
