@@ -22,7 +22,7 @@ type Insert struct {
 }
 
 type ForeignKeyLinks struct {
-	DefaultRelationship string            `name:"default-relationship" enum:"random-1-n,1-1" default:"random-1-n"`
+	DefaultRelationship string            `name:"default-relationship" enum:"db-random-1-n,1-1" default:"db-random-1-n"`
 	DBRandomOneToMany   map[string]string `name:"db-random-1-n" help:"foreignkey links to 1-N relationships using postgres' tablesamples Bernouilli random or mysql RAND() < 0.1. E.g: --random-1-n=\"customers=orders;orders=items\""`
 	OneToOne            map[string]string `name:"1-1" help:"Override foreignkey links to 1-1 relationships. E.g: --1-1=\"citizens=ssns\""`
 }
