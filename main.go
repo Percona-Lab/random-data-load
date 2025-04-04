@@ -10,6 +10,7 @@ import (
 	"github.com/alecthomas/kong"
 	"github.com/rs/zerolog"
 	"github.com/ylacancellera/random-data-load/cmd"
+	"github.com/ylacancellera/random-data-load/generate"
 )
 
 const (
@@ -39,7 +40,9 @@ func main() {
 		kong.Description("Load random data into a table"),
 		kong.UsageOnError(),
 		kong.Vars{
-			"version": buildInfo,
+			"version":               buildInfo,
+			"OneToOneFlag":          generate.OneToOneFlag,
+			"DBRandomOneToManyFlag": generate.DBRandomOneToManyFlag,
 		},
 		kong.ConfigureHelp(kong.HelpOptions{
 			Compact: false,

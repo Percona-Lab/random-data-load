@@ -22,9 +22,29 @@ type Insert struct {
 }
 
 type ForeignKeyLinks struct {
-	DefaultRelationship string            `name:"default-relationship" enum:"db-random-1-n,1-1" default:"db-random-1-n"`
-	DBRandomOneToMany   map[string]string `name:"db-random-1-n" help:"foreignkey links to 1-N relationships using postgres' tablesamples Bernouilli random or mysql RAND() < 0.1. E.g: --random-1-n=\"customers=orders;orders=items\""`
-	OneToOne            map[string]string `name:"1-1" help:"Override foreignkey links to 1-1 relationships. E.g: --1-1=\"citizens=ssns\""`
+	DefaultRelationship string            `name:"default-relationship" enum:"${DBRandomOneToManyFlag},${OneToOneFlag}" default:"${DBRandomOneToManyFlag}"`
+	DBRandom1N          map[string]string ` help:"foreignkey links to 1-N relationships using postgres' tablesamples Bernouilli random or mysql RAND() < 0.1. E.g: --${DBRandomOneToManyFlag}=\"customers=orders;orders=items\""`
+	OneToOne            map[string]string `name:"1-1" help:"Override foreignkey links to 1-1 relationships. E.g: --${OneToOneFlag}=\"citizens=ssns\""`
+}
+
+const (
+	OneToOneFlag          = "1-1"
+	DBRandomOneToManyFlag = "db-random-1-n"
+)
+
+var fkLinkToSamplerCreator = map[string]SamplerBuilder{
+	OneToOneFlag:          NewUniformSample,
+	DBRandomOneToManyFlag: NewDBRandomSample,
+}
+
+func (r ForeignKeyLinks) relationship(tableName, refTableName string) SamplerBuilder {
+	if r.OneToOne[tableName] == refTableName {
+		return fkLinkToSamplerCreator[OneToOneFlag]
+	}
+	if r.DBRandom1N[tableName] == refTableName {
+		return fkLinkToSamplerCreator[DBRandomOneToManyFlag]
+	}
+	return fkLinkToSamplerCreator[r.DefaultRelationship]
 }
 
 var (
@@ -268,8 +288,8 @@ func (in *Insert) sampleFieldsTable(fields []db.Field, values [][]Getter) error 
 			subSlice[i] = values[i][colIdx : colIdx+len(constraint.ReferencedFields)]
 		}
 
-		fklink := in.fklinks.relationship(in.table.Name, constraint.ReferencedTableName)
-		sampler := in.createSamplerFromForeignkeyLinks(fklink, constraint, subSlice)
+		samplerInit := in.fklinks.relationship(in.table.Name, constraint.ReferencedTableName)
+		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
 		err = sampler.Sample()
 		if err != nil {
 			return errors.Wrap(err, "sampleFieldsTable")
@@ -278,29 +298,4 @@ func (in *Insert) sampleFieldsTable(fields []db.Field, values [][]Getter) error 
 
 	}
 	return nil
-}
-
-func (r ForeignKeyLinks) relationship(tableName, refTableName string) string {
-	if r.OneToOne[tableName] == refTableName {
-		return "1-1"
-	}
-	if r.DBRandomOneToMany[tableName] == refTableName {
-		return "db-random-1-n"
-	}
-	return r.DefaultRelationship
-}
-
-// not fancy, but could not find a normal solution to interface the "sampler" together in a way like
-//
-// var fkLinkToSamplerCreator = map[string]func([]db.Field, string, string, [][]Getter) Sampler{
-//	"1-1": NewRandomSample,
-// }
-func (in *Insert) createSamplerFromForeignkeyLinks(fklink string, constraint db.Constraint, subSlice [][]Getter) Sampler {
-	switch fklink {
-	case "1-1":
-		return NewUniformSample(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
-	case "db-random-1-n":
-		return NewDBRandomSample(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
-	}
-	return NewDBRandomSample(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
 }

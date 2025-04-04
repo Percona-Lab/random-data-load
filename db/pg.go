@@ -40,7 +40,7 @@ func (postgres Postgres) GetFields(schema, tablename string) ([]Field, error) {
 
 	rows, err := DB.Query(query, schema, tablename)
 	if err != nil {
-		return []Field{}, errors.Wrap(err, "postgres.GetFields")
+		return []Field{}, errors.Wrapf(err, "postgres.GetFields: query: %s, schema: %s, table: %s", query, schema, tablename)
 	}
 	defer rows.Close()
 
@@ -72,7 +72,7 @@ func (postgres Postgres) GetFields(schema, tablename string) ([]Field, error) {
 		return []Field{}, err
 	}
 	if !found {
-		return []Field{}, errors.New("fields not found")
+		return []Field{}, errors.Errorf("fields not found: query: %s, schema: %s, table: %s", query, schema, tablename)
 	}
 	return fields, nil
 }

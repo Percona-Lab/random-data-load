@@ -12,6 +12,8 @@ type Sampler interface {
 	Sample() error
 }
 
+type SamplerBuilder func([]db.Field, string, string, [][]Getter) Sampler
+
 type sampleCommon struct {
 	schema string
 	table  string
@@ -93,7 +95,7 @@ func (s *UniformSample) Sample() error {
 
 var storedUniformSamples = map[string]*UniformSample{}
 
-func NewUniformSample(fields []db.Field, schema, name string, values [][]Getter) *UniformSample {
+func NewUniformSample(fields []db.Field, schema, name string, values [][]Getter) Sampler {
 	if s, ok := storedUniformSamples[name]; ok {
 		s.values = values
 		return s
@@ -122,7 +124,7 @@ func (s *DBRandomSample) Sample() error {
 	return s.query(query, s.values)
 }
 
-func NewDBRandomSample(fields []db.Field, schema, name string, values [][]Getter) *DBRandomSample {
+func NewDBRandomSample(fields []db.Field, schema, name string, values [][]Getter) Sampler {
 	s := &DBRandomSample{}
 	s.table = name
 	s.schema = schema
