@@ -1,0 +1,132 @@
+package data
+
+import (
+	"fmt"
+
+	"github.com/rs/zerolog/log"
+	"gitlab.com/dalibo/transqlate/ast"
+	"gitlab.com/dalibo/transqlate/mysql"
+)
+
+var aliases = map[string]string{} // only help to identify implicit joins
+
+func ParseQuery(query, queryFile, engine string) (map[string]struct{}, map[string]struct{}, map[string]string, error) {
+
+	var parsed ast.Node
+	var err error
+	tables := map[string]struct{}{}
+	identifiers := map[string]struct{}{}
+	joins := map[string]string{}
+
+	// don't need to iterate over selected columns, joins, where, group bys
+	// having every raw identifiers will be good enough since it's used as a whitelist
+	// it might have collisions down the line, but at worst it would only generate data on some extra column
+	identifiersTraverser := func(n ast.Node) bool {
+		switch n := n.(type) {
+		case ast.Leaf:
+			if n.IsIdentifier() {
+				identifiers[n.Token.Str] = struct{}{}
+			}
+		}
+		return true
+	}
+
+	// we want every mentioned table names
+	// aliases are not wanted
+	tablesTraverser := func(n ast.Node) bool {
+		switch n := n.(type) {
+		case ast.Join:
+			leftname := tableName(n.Left)
+			rightname := tableName(n.Right)
+			log.Debug().Str("leftname", leftname).Str("rightname", rightname).Type("node", n).Type("leftnode", n.Left).Type("rightnode", n.Right).Msg("tableTraverser")
+			if leftname != "" {
+				tables[leftname] = struct{}{}
+			}
+			if rightname != "" {
+				tables[rightname] = struct{}{}
+			}
+		case ast.Alias:
+			tablename := tableName(n)
+			log.Debug().Str("tablename", tablename).Type("node", n).Msg("tableTraverser")
+			if tablename != "" {
+				tables[tablename] = struct{}{}
+				aliases[n.Name.Str] = tablename
+			}
+		case ast.From:
+			for _, item := range n.Tables {
+				tablename := tableName(item.Expression)
+				log.Debug().Str("tablename", tablename).Type("node", n).Type("item", item.Expression).Msg("tableTraverser")
+				if tablename != "" {
+					tables[tablename] = struct{}{}
+				}
+			}
+		}
+		return true
+	}
+
+	// joinsTraverser will guess joins
+	// the goal is to find joins that are not defined in schemas with foreign keys
+	// that way we will be able to create a fake FK in the tool and have matching data
+	// Joins that are indirect (subqueries, CTE) are currently missed
+	joinsTraverser := func(n ast.Node) bool {
+		switch n := n.(type) {
+		case ast.Join:
+			tmp := n.Condition.(ast.Where)
+			for _, clause := range tmp.Conditions {
+				tmp := clause.Expression.(ast.Infix)
+				left := joinRemoveAliases(tmp.Left)
+				right := joinRemoveAliases(tmp.Right)
+				joins[left] = right
+			}
+		}
+		return true
+	}
+
+	if engine == "mysql" {
+		parsed, err = mysql.Engine().Parse(queryFile, query)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+
+	parsed.Traverse(tablesTraverser)
+	parsed.Traverse(identifiersTraverser)
+	parsed.Traverse(joinsTraverser)
+	fmt.Println(identifiers)
+	fmt.Println(joins)
+	return tables, identifiers, joins, err
+}
+
+// Differs from ast.Tablename for how alias are handled,
+// JOINs are removed because they handled a layer above not to miss the left nodes
+func tableName(expr ast.Node) string {
+	switch expr := expr.(type) {
+	case ast.Alias: // X.Y AS mytable, (SELECT ...) mytable, ...
+		return tableName(expr.Expression) // Return mytable.
+	case ast.Leaf: // plain SELECT FROM mytable
+		return expr.Token.Str // return mytable
+	case ast.Infix: // SELECT FROM namespace.mytable.
+		if expr.Is(".") {
+			return tableName(expr.Right) // Return mytable
+		}
+	default:
+		log.Debug().Type("node", expr).Msg("tableName unhandled type")
+	}
+	return "" // Anonymous table
+}
+
+func joinRemoveAliases(expr ast.Node) string {
+	switch expr := expr.(type) {
+	case ast.Infix:
+		left := expr.Left.(ast.Leaf)
+		right := expr.Right.(ast.Leaf)
+		tablename := left.Token.Str
+		if realTableName, ok := aliases[tablename]; ok {
+			tablename = realTableName
+		}
+		return tablename + "." + right.Token.Str
+	default:
+		log.Debug().Type("node", expr).Msg("joinRemoveAliases unhandled type")
+	}
+	return ""
+}

@@ -98,7 +98,7 @@ func (_ Postgres) GetConstraints(schema, tablename string) ([]Constraint, error)
 	query := `
 SELECT c.constraint_name, 
 	y.table_schema as referenced_schema_name, 
-	y.table_name as refereneced_table_name, 
+	y.table_name as referenced_table_name, 
 	string_agg(y.column_name, ';' ORDER BY x.ordinal_position) as referenced_column_names, 
 	string_agg(x.column_name, ';' ORDER BY x.ordinal_position) as column_names
 FROM information_schema.referential_constraints c

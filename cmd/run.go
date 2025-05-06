@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/apoorvam/goterminal"
+	"github.com/ylacancellera/random-data-load/data"
 	"github.com/ylacancellera/random-data-load/db"
 	"github.com/ylacancellera/random-data-load/generate"
 )
@@ -18,6 +19,9 @@ type RunCmd struct {
 	BulkSize int64 `name:"bulk-size" help:"Number of rows per insert statement" default:"1000"`
 	DryRun   bool  `name:"dry-run" help:"Print queries to the standard output instead of inserting them into the db"`
 	Quiet    bool  `name:"quiet" help:"Do not print progress bar"`
+
+	Query     string
+	QueryFile string
 
 	generate.ForeignKeyLinks
 }
@@ -34,6 +38,19 @@ func (cmd *RunCmd) Run() error {
 		return err
 	}
 
+	var (
+		tables, identifiers map[string]struct{}
+		joins               map[string]string
+	)
+	if cmd.Query != "" || cmd.QueryFile != "" {
+		tables, identifiers, joins, err = data.ParseQuery(cmd.Query, cmd.QueryFile, cmd.DB.Engine)
+		if err != nil {
+			return err
+		}
+	}
+	_ = tables
+	_ = identifiers
+	_ = joins
 	_, err = cmd.run(table)
 	return err
 }

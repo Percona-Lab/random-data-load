@@ -84,7 +84,7 @@ func LoadTable(database, tablename string) (*Table, error) {
 	//TODO currently not protected against cyclical dependencies
 	err = table.resolveConstraints()
 	if err != nil {
-		return nil, errors.Wrap(err, "resolveConstraints")
+		return nil, errors.Wrap(err, "LoadTable")
 	}
 
 	log.Debug().Strs("fields", table.FieldNames()).Int("lenConstraints", len(table.Constraints)).Str("tablename", table.Name).Str("table schema", table.Schema).Msg("loaded table")
