@@ -1,8 +1,6 @@
 package data
 
 import (
-	"fmt"
-
 	"github.com/rs/zerolog/log"
 	"gitlab.com/dalibo/transqlate/ast"
 	"gitlab.com/dalibo/transqlate/mysql"
@@ -14,14 +12,27 @@ func ParseQuery(query, queryFile, engine string) (map[string]struct{}, map[strin
 
 	var parsed ast.Node
 	var err error
-	tables := map[string]struct{}{}
+
+	if engine == "mysql" {
+		parsed, err = mysql.Engine().Parse(queryFile, query)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+
+	tables := traverseTables(parsed)
+	identifiers := traverseIdentifiers(parsed)
+	joins := traverseJoins(parsed)
+	return tables, identifiers, joins, nil
+}
+
+func traverseIdentifiers(n ast.Node) map[string]struct{} {
 	identifiers := map[string]struct{}{}
-	joins := map[string]string{}
 
 	// don't need to iterate over selected columns, joins, where, group bys
 	// having every raw identifiers will be good enough since it's used as a whitelist
 	// it might have collisions down the line, but at worst it would only generate data on some extra column
-	identifiersTraverser := func(n ast.Node) bool {
+	traverser := func(n ast.Node) bool {
 		switch n := n.(type) {
 		case ast.Leaf:
 			if n.IsIdentifier() {
@@ -30,10 +41,16 @@ func ParseQuery(query, queryFile, engine string) (map[string]struct{}, map[strin
 		}
 		return true
 	}
+	traverser(n)
+	return identifiers
+}
+
+func traverseTables(n ast.Node) map[string]struct{} {
+	tables := map[string]struct{}{}
 
 	// we want every mentioned table names
 	// aliases are not wanted
-	tablesTraverser := func(n ast.Node) bool {
+	traverser := func(n ast.Node) bool {
 		switch n := n.(type) {
 		case ast.Join:
 			leftname := tableName(n.Left)
@@ -64,11 +81,19 @@ func ParseQuery(query, queryFile, engine string) (map[string]struct{}, map[strin
 		return true
 	}
 
+	traverser(n)
+	return tables
+}
+
+func traverseJoins(n ast.Node) map[string]string {
+
+	joins := map[string]string{}
+
 	// joinsTraverser will guess joins
 	// the goal is to find joins that are not defined in schemas with foreign keys
 	// that way we will be able to create a fake FK in the tool and have matching data
 	// Joins that are indirect (subqueries, CTE) are currently missed
-	joinsTraverser := func(n ast.Node) bool {
+	traverser := func(n ast.Node) bool {
 		switch n := n.(type) {
 		case ast.Join:
 			tmp := n.Condition.(ast.Where)
@@ -82,19 +107,8 @@ func ParseQuery(query, queryFile, engine string) (map[string]struct{}, map[strin
 		return true
 	}
 
-	if engine == "mysql" {
-		parsed, err = mysql.Engine().Parse(queryFile, query)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-	}
-
-	parsed.Traverse(tablesTraverser)
-	parsed.Traverse(identifiersTraverser)
-	parsed.Traverse(joinsTraverser)
-	fmt.Println(identifiers)
-	fmt.Println(joins)
-	return tables, identifiers, joins, err
+	traverser(n)
+	return joins
 }
 
 // Differs from ast.Tablename for how alias are handled,
