@@ -1,0 +1,155 @@
+package main
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"testing"
+
+	"github.com/ory/dockertest"
+)
+
+var toolExecutable = "./random-data-load"
+
+var testsdb map[string]struct {
+	resource *dockertest.Resource
+	db       *sql.DB
+	port     string
+}
+
+func TestMain(m *testing.M) {
+
+	// uses a sensible default on windows (tcp/http) and linux/osx (socket)
+	// DOCKER_HOST=unix:///run/user/1000/docker.sock go test .
+	pool, err := dockertest.NewPool("")
+	if err != nil {
+		log.Panicf("Could not construct pool: %s", err)
+	}
+
+	err = pool.Client.Ping()
+	if err != nil {
+		log.Panicf("Could not connect to Docker: %s", err)
+	}
+
+	pgresource, err := pool.Run("postgres", "17", []string{"POSTGRES_PASSWORD=dockertest", "POSTGRES_USER=dockertest", "POSTGRES_DB=test"})
+	if err != nil {
+		log.Panicf("Could not start pg resource: %s", err)
+	}
+	mysqlresource, err := pool.Run("mysql", "8.0", []string{"MYSQL_ROOT_PASSWORD=dockertest", "MYSQL_PASSWORD=dockertest", "MYSQL_DATABASE=test", "MYSQL_USER=dockertest"})
+	if err != nil {
+		log.Panicf("Could not start mysql resource: %s", err)
+	}
+	defer func() {
+		for _, resource := range []*dockertest.Resource{pgresource, mysqlresource} {
+			if err := pool.Purge(resource); err != nil {
+				log.Panicf("Could not purge resource: %s", err)
+			}
+		}
+	}()
+
+	var pgdb *sql.DB
+	if err = pool.Retry(func() error {
+		pgdb, err = sql.Open("postgres", fmt.Sprintf("postgres://dockertest:dockertest@%s/test?sslmode=disable", pgresource.GetHostPort("5432/tcp")))
+		if err != nil {
+			return err
+		}
+		return pgdb.Ping()
+	}); err != nil {
+		log.Panicf("Could not connect to pg docker: %s", err)
+	}
+
+	var mysqldb *sql.DB
+	if err = pool.Retry(func() error {
+		mysqldb, err = sql.Open("mysql", fmt.Sprintf("dockertest:dockertest@(localhost:%s)/test", mysqlresource.GetPort("3306/tcp")))
+		if err != nil {
+			return err
+		}
+		return mysqldb.Ping()
+	}); err != nil {
+		log.Panicf("Could not connect to mysql docker: %s", err)
+	}
+
+	testsdb = map[string]struct {
+		resource *dockertest.Resource
+		db       *sql.DB
+		port     string
+	}{
+		"pg": struct {
+			resource *dockertest.Resource
+			db       *sql.DB
+			port     string
+		}{
+			resource: pgresource,
+			db:       pgdb,
+			port:     pgresource.GetPort("5432/tcp"),
+		},
+		"mysql": struct {
+			resource *dockertest.Resource
+			db       *sql.DB
+			port     string
+		}{
+			resource: mysqlresource,
+			db:       mysqldb,
+			port:     mysqlresource.GetPort("3306/tcp"),
+		},
+	}
+
+	// run tests
+	m.Run()
+}
+
+func TestRun(t *testing.T) {
+
+	tests := []struct {
+		name   string
+		query  string
+		engine string
+		tables []string
+		cmd    []string
+	}{
+		{
+			name:   "basic",
+			query:  "select count(*) = 10 from t1;",
+			engine: "pg",
+			cmd:    []string{"--rows=10", "--table=t1"},
+		},
+		{
+			name:   "basic",
+			query:  "select count(*) = 10 from t1;",
+			engine: "mysql",
+			cmd:    []string{"--rows=10", "--table=t1"},
+		},
+	}
+
+	for _, test := range tests {
+		ddl, err := os.ReadFile(fmt.Sprintf("tests/%s/%s", test.engine, test.name))
+		if err != nil {
+			t.Errorf("failed to read %s testcase %s: %v", test.engine, test.name, err)
+		}
+		_, err = testsdb[test.engine].db.Exec(string(ddl))
+		if err != nil {
+			t.Errorf("failed to exec %s ddl for testname %s: %v", test.engine, test.name, err)
+		}
+
+		args := []string{"run", "--engine=" + test.engine, "--host=127.0.0.1", "--user=dockertest", "--password=dockertest", "--database=test", "--port=" + testsdb[test.engine].port}
+		args = append(args, test.cmd...)
+
+		out, err := exec.Command(toolExecutable, args...).CombinedOutput()
+		if err != nil {
+			t.Errorf("failed to exec %s for testname %s %s: %v, out: %s", toolExecutable, test.engine, test.name, err, out)
+		} else {
+			row := testsdb[test.engine].db.QueryRow(test.query)
+			var ok bool
+			err = row.Scan(&ok)
+			if err != nil {
+				t.Errorf("failed to query check sql for testname %s %s: %v", test.engine, test.name, err)
+			}
+			if !ok {
+				t.Errorf("sql check returned false for testname %s %s", test.engine, test.name)
+			}
+		}
+
+	}
+}

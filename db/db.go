@@ -6,7 +6,7 @@ import (
 )
 
 type Config struct {
-	Engine   string `enum:"mysql,pg" required:""`
+	Engine   string `enum:"mysql,pg" required:"" help:"mysql,pg"`
 	Database string
 	Host     string
 	User     string
