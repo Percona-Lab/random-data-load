@@ -103,53 +103,112 @@ func TestMain(m *testing.M) {
 func TestRun(t *testing.T) {
 
 	tests := []struct {
-		name   string
-		query  string
-		engine string
-		tables []string
-		cmd    []string
+		name    string
+		query   string // used to check if the generated result seems appropriate
+		engines []string
+		tables  []string
+		cmds    [][]string
 	}{
 		{
-			name:   "basic",
-			query:  "select count(*) = 10 from t1;",
-			engine: "pg",
-			cmd:    []string{"--rows=10", "--table=t1"},
+			name:    "basic",
+			query:   "select count(*) = 10 from t1;",
+			engines: []string{"pg", "mysql"},
+			cmds:    [][]string{[]string{"--rows=10", "--table=t1"}},
+		},
+
+		{
+			name:    "pk_bigserial",
+			query:   "select count(*) = 100 from t1;",
+			engines: []string{"pg"},
+			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 		{
-			name:   "basic",
-			query:  "select count(*) = 10 from t1;",
-			engine: "mysql",
-			cmd:    []string{"--rows=10", "--table=t1"},
+			name:    "pk_identity",
+			query:   "select count(*) = 100 from t1;",
+			engines: []string{"pg"},
+			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
+		{
+			name:    "pk",
+			query:   "select count(*) = 100 from t1;",
+			engines: []string{"pg", "mysql"},
+			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
+		{
+			name:    "pk_auto_increment",
+			query:   "select count(*) = 100 from t1;",
+			engines: []string{"mysql"},
+			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
+
+		{
+			name:    "pk_varchar",
+			query:   "select count(*) = 100 from t1;",
+			engines: []string{"pg", "mysql"},
+			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
+
+		{
+			name:    "bool",
+			query:   "select count(*) = 100 from t1;",
+			engines: []string{"pg", "mysql"},
+			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
+
+		{
+			name:    "fk_uniform",
+			query:   "select count(*) = 100 from t1 join t2 on t1.t2_id = t2.id;",
+			engines: []string{"pg", "mysql"},
+			cmds:    [][]string{[]string{"--rows=100", "--table=t2"}, []string{"--rows=100", "--table=t1", "--default-relationship=1-1"}},
 		},
 	}
 
 	for _, test := range tests {
-		ddl, err := os.ReadFile(fmt.Sprintf("tests/%s/%s", test.engine, test.name))
-		if err != nil {
-			t.Errorf("failed to read %s testcase %s: %v", test.engine, test.name, err)
-		}
-		_, err = testsdb[test.engine].db.Exec(string(ddl))
-		if err != nil {
-			t.Errorf("failed to exec %s ddl for testname %s: %v", test.engine, test.name, err)
-		}
+		for _, engine := range test.engines {
+			if err := ddl(engine, "reset"); err != nil {
+				t.Error(err)
+				continue
+			}
+			if err := ddl(engine, test.name); err != nil {
+				t.Error(err)
+				continue
+			}
 
-		args := []string{"run", "--engine=" + test.engine, "--host=127.0.0.1", "--user=dockertest", "--password=dockertest", "--database=test", "--port=" + testsdb[test.engine].port}
-		args = append(args, test.cmd...)
+			// calling tool with args directly
+			for _, cmd := range test.cmds {
+				args := []string{"run", "--engine=" + engine, "--host=127.0.0.1", "--user=dockertest", "--password=dockertest", "--database=test", "--port=" + testsdb[engine].port}
+				args = append(args, cmd...)
 
-		out, err := exec.Command(toolExecutable, args...).CombinedOutput()
-		if err != nil {
-			t.Errorf("failed to exec %s for testname %s %s: %v, out: %s", toolExecutable, test.engine, test.name, err, out)
-		} else {
-			row := testsdb[test.engine].db.QueryRow(test.query)
+				out, err := exec.Command(toolExecutable, args...).CombinedOutput()
+				if err != nil {
+					t.Errorf("failed to exec %s for testname %s %s: %v, out: %s", toolExecutable, engine, test.name, err, out)
+					continue
+				}
+			}
+
+			row := testsdb[engine].db.QueryRow(test.query)
 			var ok bool
-			err = row.Scan(&ok)
+			err := row.Scan(&ok)
 			if err != nil {
-				t.Errorf("failed to query check sql for testname %s %s: %v", test.engine, test.name, err)
+				t.Errorf("failed to query check sql for testname %s %s: %v", engine, test.name, err)
 			}
 			if !ok {
-				t.Errorf("sql check returned false for testname %s %s", test.engine, test.name)
+				t.Errorf("sql check returned false for testname %s %s", engine, test.name)
 			}
 		}
-
 	}
+}
+
+func ddl(engine, name string) error {
+	ddl, err := os.ReadFile(fmt.Sprintf("tests/%s/%s", engine, name))
+	if err != nil {
+		return fmt.Errorf("failed to read %s testcase %s: %v", engine, name, err)
+	}
+
+	// loading table schema
+	_, err = testsdb[engine].db.Exec(string(ddl))
+	if err != nil {
+		return fmt.Errorf("failed to exec %s ddl for testname %s: %v", engine, name, err)
+	}
+	return nil
 }

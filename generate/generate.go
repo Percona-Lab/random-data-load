@@ -241,7 +241,9 @@ func generateFieldsRow(fields []db.Field, insertValues []Getter) {
 		field := fields[colIndex]
 		var value Getter
 		switch field.DataType {
-		case "tinyint", "bit", "bool", "boolean":
+		case "bool", "boolean":
+			value = NewRandomBool(field.ColumnName, field.IsNullable)
+		case "tinyint", "bit":
 			value = NewRandomIntRange(field.ColumnName, 0, 1, field.IsNullable)
 		case "smallint", "mediumint", "int", "integer", "bigint":
 			maxValue := maxValues["bigint"]

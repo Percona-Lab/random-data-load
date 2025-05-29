@@ -1,0 +1,4 @@
+CREATE TABLE t1 (
+	id bigint generated always as identity,
+	i int
+);
