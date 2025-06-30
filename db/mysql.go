@@ -73,6 +73,7 @@ func (mysql MySQL) GetFields(schema, tablename string) ([]Field, error) {
 		"NUMERIC_SCALE",
 		"COLUMN_TYPE",
 		"COLUMN_KEY",
+		"extra like '%auto_increment%'",
 	}
 
 	query := "SELECT " + strings.Join(selectValues, ",") +
@@ -148,6 +149,7 @@ func (_ MySQL) makeScanRecipients(f *Field, allowNull, columnType *string, cols 
 		&f.NumericScale,
 		&columnType,
 		&f.ColumnKey,
+		&f.AutoIncrement,
 	}
 
 	return fields

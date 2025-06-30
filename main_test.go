@@ -62,7 +62,7 @@ func TestMain(m *testing.M) {
 
 	var mysqldb *sql.DB
 	if err = pool.Retry(func() error {
-		mysqldb, err = sql.Open("mysql", fmt.Sprintf("dockertest:dockertest@(localhost:%s)/test", mysqlresource.GetPort("3306/tcp")))
+		mysqldb, err = sql.Open("mysql", fmt.Sprintf("dockertest:dockertest@(localhost:%s)/test?multiStatements=true", mysqlresource.GetPort("3306/tcp")))
 		if err != nil {
 			return err
 		}
@@ -124,7 +124,7 @@ func TestRun(t *testing.T) {
 		},
 		{
 			name:    "pk_identity",
-			query:   "select count(*) = 100 from t1;",
+			query:   "select count(*) = 100 from t1 where id < 101;",
 			engines: []string{"pg"},
 			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
@@ -136,7 +136,7 @@ func TestRun(t *testing.T) {
 		},
 		{
 			name:    "pk_auto_increment",
-			query:   "select count(*) = 100 from t1;",
+			query:   "select count(*) = 100 from t1 where id < 101;",
 			engines: []string{"mysql"},
 			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
@@ -157,9 +157,9 @@ func TestRun(t *testing.T) {
 
 		{
 			name:    "fk_uniform",
-			query:   "select count(*) = 100 from t1 join t2 on t1.t2_id = t2.id;",
+			query:   "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
 			engines: []string{"pg", "mysql"},
-			cmds:    [][]string{[]string{"--rows=100", "--table=t2"}, []string{"--rows=100", "--table=t1", "--default-relationship=1-1"}},
+			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
 		},
 	}
 
@@ -194,6 +194,7 @@ func TestRun(t *testing.T) {
 			}
 			if !ok {
 				t.Errorf("sql check returned false for testname %s %s", engine, test.name)
+				abortAndKeepContainersRunning(engine, test.query)
 			}
 		}
 	}
@@ -211,4 +212,10 @@ func ddl(engine, name string) error {
 		return fmt.Errorf("failed to exec %s ddl for testname %s: %v", engine, name, err)
 	}
 	return nil
+}
+
+func abortAndKeepContainersRunning(engine, testquery string) {
+	if os.Getenv("KEEP_DB") == "1" {
+		log.Fatalf("Keep databases running after error\nYou can connect to %s container %s to check manually\n%s", engine, testsdb[engine].resource.Container.Name, testquery)
+	}
 }
