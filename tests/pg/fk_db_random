@@ -1,0 +1,9 @@
+CREATE TABLE t1(
+	id bigint generated always as identity primary key,
+	data varchar(30)
+);
+CREATE TABLE t2(
+	id bigint generated always as identity primary key,
+	t1_id bigint references t1(id),
+	data varchar(30)
+);

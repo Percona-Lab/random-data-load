@@ -150,7 +150,7 @@ func TestRun(t *testing.T) {
 
 		{
 			name:    "bool",
-			query:   "select count(*) = 100 from t1;",
+			query:   "select (count(*) = 100) and (sum(CASE WHEN c1 THEN 1 ELSE 0 END) between 1 and 99) from t1;",
 			engines: []string{"pg", "mysql"},
 			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
@@ -160,6 +160,14 @@ func TestRun(t *testing.T) {
 			query:   "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
 			engines: []string{"pg", "mysql"},
 			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
+		},
+
+		// not a great test for now, but we want some matches, but not every lines matched
+		{
+			name:    "fk_db_random",
+			query:   "select count(*) between 1 and 99 from t1 join t2 on t1.id = t2.t1_id;",
+			engines: []string{"pg", "mysql"},
+			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=db-random-1-n"}},
 		},
 	}
 

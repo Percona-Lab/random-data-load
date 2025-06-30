@@ -22,5 +22,5 @@ func (r *RandomBool) Quote() string {
 }
 
 func NewRandomBool(name string, allowNull bool) *RandomBool {
-	return &RandomBool{rand.Int63n(1)}
+	return &RandomBool{rand.Int63n(2)}
 }
