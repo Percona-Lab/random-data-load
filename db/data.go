@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"strings"
 
+	"slices"
+
 	"github.com/rs/zerolog/log"
 
 	"github.com/pkg/errors"
@@ -50,6 +52,8 @@ type Field struct {
 	AutoIncrement          bool
 	ColumnKey              string
 	SetEnumVals            []string
+	HasDefaultValue        bool
+	skip                   bool
 }
 
 func newTable() *Table {
@@ -132,6 +136,9 @@ func (t *Table) FieldsToGenerate() []Field {
 	fields := []Field{}
 
 	for _, field := range t.Fields {
+		if field.skip {
+			continue
+		}
 		if !isSupportedType(field.DataType) {
 			continue
 		}
@@ -152,16 +159,35 @@ func (t *Table) FieldsToSample() []Field {
 
 	for _, constraint := range t.Constraints {
 	ITERATE_FK_COLUMNS:
-		for _, colname := range constraint.ColumnsName {
-			for _, field := range t.Fields {
-				if field.ColumnName == colname {
-					fields = append(fields, field)
-					continue ITERATE_FK_COLUMNS
-				}
+		for _, field := range t.Fields {
+			if slices.Contains(constraint.ColumnsName, field.ColumnName) && !field.skip {
+				fields = append(fields, field)
+				continue ITERATE_FK_COLUMNS
 			}
 		}
 	}
 	return fields
+}
+
+func (t *Table) SkipBasedOnIdentifiers(identifiers map[string]struct{}) {
+	log.Debug().Interface("identifiers", identifiers).Str("tablename", t.Name).Str("table schema", t.Schema).Str("func", "skipBasedOnIdentifiers").Msg("init")
+	for i, field := range t.Fields {
+		if _, ok := identifiers[field.ColumnName]; !ok && field.skippeable() {
+			log.Debug().Str("field", field.ColumnName).Str("tablename", t.Name).Str("table schema", t.Schema).Str("func", "skipBasedOnIdentifiers").Msg("set skip")
+			field.skip = true
+			t.Fields[i] = field
+			continue
+		}
+		log.Debug().Str("field", field.ColumnName).Str("tablename", t.Name).Str("table schema", t.Schema).Bool("skippeable", field.skippeable()).Str("func", "skipBasedOnIdentifiers").Msg("don't skip")
+	}
+}
+
+func (f *Field) skippeable() bool {
+	log.Debug().Str("field", f.ColumnName).Bool("nullable", f.IsNullable).Bool("hasDefault", f.HasDefaultValue).Str("func", "skippeable").Msg("debug skippeable")
+	if !f.IsNullable && !f.HasDefaultValue {
+		return false
+	}
+	return true
 }
 
 func isSupportedType(fieldType string) bool {

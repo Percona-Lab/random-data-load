@@ -66,7 +66,7 @@ func (mysql MySQL) GetFields(schema, tablename string) ([]Field, error) {
 	re := regexp.MustCompile(`^(.*?)(?:\((.*?)\)(.*))?$`)
 	selectValues := []string{
 		"COLUMN_NAME",
-		"IS_NULLABLE",
+		"IS_NULLABLE = 'YES'",
 		"DATA_TYPE",
 		"CHARACTER_MAXIMUM_LENGTH",
 		"NUMERIC_PRECISION",
@@ -74,6 +74,7 @@ func (mysql MySQL) GetFields(schema, tablename string) ([]Field, error) {
 		"COLUMN_TYPE",
 		"COLUMN_KEY",
 		"extra like '%auto_increment%'",
+		"COLUMN_DEFAULT IS NOT NULL",
 	}
 
 	query := "SELECT " + strings.Join(selectValues, ",") +
@@ -99,8 +100,8 @@ func (mysql MySQL) GetFields(schema, tablename string) ([]Field, error) {
 		found = true
 
 		var f Field
-		var allowNull, columnType string
-		scanRecipients := mysql.makeScanRecipients(&f, &allowNull, &columnType, cols)
+		var columnType string
+		scanRecipients := mysql.makeScanRecipients(&f, &columnType, cols)
 		err := rows.Scan(scanRecipients...)
 		if err != nil {
 			log.Error().Err(err).Msg("cannot get fields")
@@ -123,7 +124,6 @@ func (mysql MySQL) GetFields(schema, tablename string) ([]Field, error) {
 
 		f.SetEnumVals = allowedValues
 
-		f.IsNullable = allowNull == "YES"
 		fields = append(fields, f)
 
 	}
@@ -138,10 +138,10 @@ func (mysql MySQL) GetFields(schema, tablename string) ([]Field, error) {
 	return fields, nil
 }
 
-func (_ MySQL) makeScanRecipients(f *Field, allowNull, columnType *string, cols []string) []interface{} {
+func (_ MySQL) makeScanRecipients(f *Field, columnType *string, cols []string) []interface{} {
 	fields := []interface{}{
 		&f.ColumnName,
-		&allowNull,
+		&f.IsNullable,
 		&f.DataType,
 		&f.CharacterMaximumLength,
 		//&f.CharacterOctetLength,
@@ -150,6 +150,7 @@ func (_ MySQL) makeScanRecipients(f *Field, allowNull, columnType *string, cols 
 		&columnType,
 		&f.ColumnKey,
 		&f.AutoIncrement,
+		&f.HasDefaultValue,
 	}
 
 	return fields

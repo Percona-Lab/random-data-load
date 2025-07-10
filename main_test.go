@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/ory/dockertest"
@@ -41,13 +42,14 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		log.Panicf("Could not start mysql resource: %s", err)
 	}
-	defer func() {
-		for _, resource := range []*dockertest.Resource{pgresource, mysqlresource} {
-			if err := pool.Purge(resource); err != nil {
-				log.Panicf("Could not purge resource: %s", err)
+	/*	defer func() {
+			for _, resource := range []*dockertest.Resource{pgresource, mysqlresource} {
+				if err := pool.Purge(resource); err != nil {
+					log.Panicf("Could not purge resource: %s", err)
+				}
 			}
-		}
-	}()
+		}()
+	*/
 
 	var pgdb *sql.DB
 	if err = pool.Retry(func() error {
@@ -97,96 +99,148 @@ func TestMain(m *testing.M) {
 	}
 
 	// run tests
-	m.Run()
+	code := m.Run()
+
+	if code != 0 && os.Getenv("KEEP_DB") == "1" {
+		log.Printf("Keeping database running because tests failed and KEEP_DB=1")
+		return
+	}
+	for _, resource := range []*dockertest.Resource{pgresource, mysqlresource} {
+		if err := pool.Purge(resource); err != nil {
+			log.Panicf("Could not purge resource: %s", err)
+		}
+	}
 }
 
 func TestRun(t *testing.T) {
 
 	tests := []struct {
-		name    string
-		query   string // used to check if the generated result seems appropriate
-		engines []string
-		tables  []string
-		cmds    [][]string
+		name       string
+		checkQuery string // used to check if the generated result seems appropriate
+		inputQuery string // applicative query we want to optimize
+		engines    []string
+		tables     []string
+		cmds       [][]string
 	}{
 		{
-			name:    "basic",
-			query:   "select count(*) = 10 from t1;",
-			engines: []string{"pg", "mysql"},
-			cmds:    [][]string{[]string{"--rows=10", "--table=t1"}},
+			name:       "basic",
+			checkQuery: "select count(*) = 10 from t1;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=10", "--table=t1"}},
 		},
 
 		{
-			name:    "pk_bigserial",
-			query:   "select count(*) = 100 from t1;",
-			engines: []string{"pg"},
-			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
+			name:       "pk_bigserial",
+			checkQuery: "select count(*) = 100 from t1;",
+			engines:    []string{"pg"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 		{
-			name:    "pk_identity",
-			query:   "select count(*) = 100 from t1 where id < 101;",
-			engines: []string{"pg"},
-			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
+			name:       "pk_identity",
+			checkQuery: "select count(*) = 100 from t1 where id < 101;",
+			engines:    []string{"pg"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 		{
-			name:    "pk",
-			query:   "select count(*) = 100 from t1;",
-			engines: []string{"pg", "mysql"},
-			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
+			name:       "pk",
+			checkQuery: "select count(*) = 100 from t1;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 		{
-			name:    "pk_auto_increment",
-			query:   "select count(*) = 100 from t1 where id < 101;",
-			engines: []string{"mysql"},
-			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
-		},
-
-		{
-			name:    "pk_varchar",
-			query:   "select count(*) = 100 from t1;",
-			engines: []string{"pg", "mysql"},
-			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
+			name:       "pk_auto_increment",
+			checkQuery: "select count(*) = 100 from t1 where id < 101;",
+			engines:    []string{"mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 
 		{
-			name:    "bool",
-			query:   "select (count(*) = 100) and (sum(CASE WHEN c1 THEN 1 ELSE 0 END) between 1 and 99) from t1;",
-			engines: []string{"pg", "mysql"},
-			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}},
+			name:       "pk_varchar",
+			checkQuery: "select count(*) = 100 from t1;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 
 		{
-			name:    "fk_uniform",
-			query:   "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
-			engines: []string{"pg", "mysql"},
-			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
+			name:       "bool",
+			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN c1 THEN 1 ELSE 0 END) between 1 and 99) from t1;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
+
+		{
+			name:       "fk_uniform",
+			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
 		},
 
 		// not a great test for now, but we want some matches, but not every lines matched
 		{
-			name:    "fk_db_random",
-			query:   "select count(*) between 1 and 99 from t1 join t2 on t1.id = t2.t1_id;",
-			engines: []string{"pg", "mysql"},
-			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=db-random-1-n"}},
+			name:       "fk_db_random",
+			checkQuery: "select count(*) between 1 and 99 from t1 join t2 on t1.id = t2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=db-random-1-n"}},
 		},
 
 		{
-			name:    "fk_multicol",
-			query:   "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id and t1.id2 = t2.t1_id2;",
-			engines: []string{"pg", "mysql"},
-			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
+			name:       "fk_multicol",
+			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id and t1.id2 = t2.t1_id2;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
 		},
+
+		{
+			name:       "basic_query",
+			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN c2 IS NULL THEN 1 ELSE 0 END) = 100)  from t1 where c1 is not null;",
+			inputQuery: "select c1 from t1;",
+			engines:    []string{"mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
+
+		{
+			name:       "identifiers_skip_not_null_nodefaults",
+			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN c2 <> '' THEN 1 ELSE 0 END) = 100)  from t1 where c1 is not null;",
+			inputQuery: "select c1 from t1;",
+			engines:    []string{"mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
+
+		{
+			name:       "identifiers_skip_not_null_defaults",
+			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN c2 <> 'test' THEN 1 ELSE 0 END) = 0)  from t1 where c1 is not null;",
+			inputQuery: "select c1 from t1;",
+			engines:    []string{"mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
+
+		/*
+			{
+				name:       "identifiers_skip_fk_multicol",
+				checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id and t1.id2 = t2.t1_id2;",
+				inputQuery: "select a1.id, a1.id2 from t1 a1 join t2 a2 on a1.id = a2.t1_id;",
+				engines:    []string{"pg", "mysql"},
+				cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
+			},
+		*/
 	}
 
 	for _, test := range tests {
 		for _, engine := range test.engines {
+			errlog := fmt.Sprintf("to repeat the test and keep the container running, use KEEP_DB=1 go test .\nengine: %s, container: %s, testname: %s", engine, testsdb[engine].resource.Container.Name, test.name)
+			switch engine {
+			case "mysql":
+				errlog += fmt.Sprintf("\ndocker exec -it %s mysql -u dockertest -pdockertest test", testsdb[engine].resource.Container.Name)
+			case "pg":
+				errlog += fmt.Sprintf("\ndocker exec -it %s bash -c 'PGPASSWORD=dockertest psql -U dockertest test'", testsdb[engine].resource.Container.Name)
+			}
+			errlog += "\n"
+
 			if err := ddl(engine, "reset"); err != nil {
-				t.Error(err)
-				continue
+				t.Fatalf("%sfailed to reset table schema: %v", errlog, err)
 			}
 			if err := ddl(engine, test.name); err != nil {
-				t.Error(err)
-				continue
+				t.Fatalf("%sfailed to apply test ddl: %v", errlog, err)
 			}
 
 			// calling tool with args directly
@@ -194,22 +248,25 @@ func TestRun(t *testing.T) {
 				args := []string{"run", "--engine=" + engine, "--host=127.0.0.1", "--user=dockertest", "--password=dockertest", "--database=test", "--port=" + testsdb[engine].port}
 				args = append(args, cmd...)
 
+				if test.inputQuery != "" {
+					args = append(args, "--query="+test.inputQuery)
+				}
+				errlog += toolExecutable + " " + strings.Join(args, " ") + "\n"
+
 				out, err := exec.Command(toolExecutable, args...).CombinedOutput()
 				if err != nil {
-					t.Errorf("failed to exec %s for testname %s %s: %v, out: %s", toolExecutable, engine, test.name, err, out)
-					continue
+					t.Fatalf("%sfailed to exec %s: %v, out: %s", errlog, toolExecutable, err, out)
 				}
 			}
 
-			row := testsdb[engine].db.QueryRow(test.query)
+			row := testsdb[engine].db.QueryRow(test.checkQuery)
 			var ok bool
 			err := row.Scan(&ok)
 			if err != nil {
-				t.Errorf("failed to query check sql for testname %s %s: %v", engine, test.name, err)
+				t.Fatalf("%sfailed to query check sql: %v", errlog, err)
 			}
 			if !ok {
-				t.Errorf("sql check returned false for testname %s %s", engine, test.name)
-				abortAndKeepContainersRunning(engine, test.query)
+				t.Fatalf("%ssql check returned false, query:\n%s", errlog, test.checkQuery)
 			}
 		}
 	}
@@ -227,10 +284,4 @@ func ddl(engine, name string) error {
 		return fmt.Errorf("failed to exec %s ddl for testname %s: %v", engine, name, err)
 	}
 	return nil
-}
-
-func abortAndKeepContainersRunning(engine, testquery string) {
-	if os.Getenv("KEEP_DB") == "1" {
-		log.Fatalf("Keep databases running after error\nYou can connect to %s container %s to check manually\n%s", engine, testsdb[engine].resource.Container.Name, testquery)
-	}
 }

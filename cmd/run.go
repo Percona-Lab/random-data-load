@@ -47,9 +47,9 @@ func (cmd *RunCmd) Run() error {
 		if err != nil {
 			return err
 		}
+		table.SkipBasedOnIdentifiers(identifiers)
 	}
 	_ = tables
-	_ = identifiers
 	_ = joins
 	_, err = cmd.run(table)
 	return err

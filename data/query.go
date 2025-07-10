@@ -1,6 +1,8 @@
 package data
 
 import (
+	"errors"
+
 	"github.com/rs/zerolog/log"
 	"gitlab.com/dalibo/transqlate/ast"
 	"gitlab.com/dalibo/transqlate/mysql"
@@ -13,11 +15,15 @@ func ParseQuery(query, queryFile, engine string) (map[string]struct{}, map[strin
 	var parsed ast.Node
 	var err error
 
-	if engine == "mysql" {
+	switch engine {
+	case "mysql":
 		parsed, err = mysql.Engine().Parse(queryFile, query)
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		//case: "pg":
+	default:
+		return nil, nil, nil, errors.New("unimplemented engine")
 	}
 
 	tables := traverseTables(parsed)
@@ -41,7 +47,7 @@ func traverseIdentifiers(n ast.Node) map[string]struct{} {
 		}
 		return true
 	}
-	traverser(n)
+	n.Traverse(traverser)
 	return identifiers
 }
 
@@ -62,13 +68,6 @@ func traverseTables(n ast.Node) map[string]struct{} {
 			if rightname != "" {
 				tables[rightname] = struct{}{}
 			}
-		case ast.Alias:
-			tablename := tableName(n)
-			log.Debug().Str("tablename", tablename).Type("node", n).Msg("tableTraverser")
-			if tablename != "" {
-				tables[tablename] = struct{}{}
-				aliases[n.Name.Str] = tablename
-			}
 		case ast.From:
 			for _, item := range n.Tables {
 				tablename := tableName(item.Expression)
@@ -81,7 +80,7 @@ func traverseTables(n ast.Node) map[string]struct{} {
 		return true
 	}
 
-	traverser(n)
+	n.Traverse(traverser)
 	return tables
 }
 
@@ -98,16 +97,23 @@ func traverseJoins(n ast.Node) map[string]string {
 		case ast.Join:
 			tmp := n.Condition.(ast.Where)
 			for _, clause := range tmp.Conditions {
-				tmp := clause.Expression.(ast.Infix)
-				left := joinRemoveAliases(tmp.Left)
-				right := joinRemoveAliases(tmp.Right)
-				joins[left] = right
+
+				switch clause := clause.Expression.(type) {
+				case ast.Infix:
+					//tmp := clause.Expression.(ast.Infix)
+					left := joinRemoveAliases(clause.Left)
+					right := joinRemoveAliases(clause.Right)
+					log.Debug().Str("left", left).Str("right", right).Type("clause", clause).Msg("JoinTraverser")
+					joins[left] = right
+				default:
+					log.Debug().Type("clause", clause).Msg("non-handled JoinTraverser")
+				}
 			}
 		}
 		return true
 	}
 
-	traverser(n)
+	n.Traverse(traverser)
 	return joins
 }
 

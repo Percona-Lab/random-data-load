@@ -33,14 +33,14 @@ var (
 )
 
 func (r *RandomString) Value() interface{} {
-	return r.value
-}
-
-func (r *RandomString) String() string {
 	if r.null {
 		return NULL
 	}
 	return r.value
+}
+
+func (r *RandomString) String() string {
+	return r.Value().(string)
 }
 
 // Quote returns a quoted string
