@@ -1,0 +1,13 @@
+CREATE TABLE t1(
+	id int auto_increment,
+	id2 int,
+	data varchar(30),
+	primary key(id, id2)
+);
+CREATE TABLE t2(
+	id int auto_increment primary key,
+	t1_id int,
+	t1_id2 int,
+	data varchar(30),
+	FOREIGN KEY(t1_id, t1_id2) REFERENCES t1(id, id2)
+);

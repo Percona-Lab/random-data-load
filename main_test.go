@@ -169,6 +169,13 @@ func TestRun(t *testing.T) {
 			engines: []string{"pg", "mysql"},
 			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=db-random-1-n"}},
 		},
+
+		{
+			name:    "fk_multicol",
+			query:   "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id and t1.id2 = t2.t1_id2;",
+			engines: []string{"pg", "mysql"},
+			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
+		},
 	}
 
 	for _, test := range tests {
