@@ -95,6 +95,9 @@ func traverseJoins(n ast.Node) map[string]string {
 	traverser := func(n ast.Node) bool {
 		switch n := n.(type) {
 		case ast.Join:
+			if n.Condition == nil {
+				return true
+			}
 			tmp := n.Condition.(ast.Where)
 			for _, clause := range tmp.Conditions {
 

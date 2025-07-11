@@ -48,9 +48,9 @@ func (cmd *RunCmd) Run() error {
 			return err
 		}
 		table.SkipBasedOnIdentifiers(identifiers)
+		table.AddVirtualFKs(joins)
 	}
 	_ = tables
-	_ = joins
 	_, err = cmd.run(table)
 	return err
 }

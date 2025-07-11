@@ -86,39 +86,54 @@ func LoadTable(database, tablename string) (*Table, error) {
 		return nil, errors.Wrap(err, "LoadTable")
 	}
 	//TODO currently not protected against cyclical dependencies
-	err = table.resolveConstraints()
-	if err != nil {
-		return nil, errors.Wrap(err, "LoadTable")
+	for constraintIdx := range table.Constraints {
+		table.Constraints[constraintIdx].populateFields(table)
+		err = table.Constraints[constraintIdx].loadReferencedTable()
+		if err != nil {
+			return nil, errors.Wrap(err, "LoadTable")
+		}
 	}
+	table.resolveColToConstraints()
 
 	log.Debug().Strs("fields", table.FieldNames()).Int("lenConstraints", len(table.Constraints)).Str("tablename", table.Name).Str("table schema", table.Schema).Msg("loaded table")
 	return table, nil
 }
 
-func (t *Table) resolveConstraints() error {
-	var err error
-	for constraintIdx, constraint := range t.Constraints {
-
-		t.Constraints[constraintIdx].ReferencedTable, err = LoadTable(constraint.ReferencedTableSchema, constraint.ReferencedTableName)
-		if err != nil {
-			return errors.Wrap(err, "resolveConstraints recursive loadtable")
-		}
-
-		for colnameIdx, colname := range constraint.ColumnsName {
-
+func (t *Table) resolveColToConstraints() {
+	for _, constraint := range t.Constraints {
+		for _, colname := range constraint.ColumnsName {
 			t.ColToConstraint[colname] = &constraint
-
-			field := t.FieldByName(colname)
-			if field == nil {
-				return errors.Errorf("could not find column %s from table %s", colname, t.Name)
-			}
-			t.Constraints[constraintIdx].Fields = append(t.Constraints[constraintIdx].Fields, *field)
-			refField := t.Constraints[constraintIdx].ReferencedTable.FieldByName(t.Constraints[constraintIdx].ReferencedColumsName[colnameIdx])
-			if refField == nil {
-				return errors.Errorf("could not find column %s from table %s", t.Constraints[constraintIdx].ReferencedColumsName[colnameIdx], t.Constraints[constraintIdx].ReferencedTable.Name)
-			}
-			t.Constraints[constraintIdx].ReferencedFields = append(t.Constraints[constraintIdx].ReferencedFields, *refField)
 		}
+	}
+}
+
+func (c *Constraint) populateFields(targetTable *Table) error {
+
+	for _, colname := range c.ColumnsName {
+
+		field := targetTable.FieldByName(colname)
+		if field == nil {
+			return errors.Errorf("could not find column %s from table %s", colname, targetTable.Name)
+		}
+		c.Fields = append(c.Fields, *field)
+	}
+	return nil
+}
+
+func (c *Constraint) loadReferencedTable() error {
+
+	var err error
+	c.ReferencedTable, err = LoadTable(c.ReferencedTableSchema, c.ReferencedTableName)
+	if err != nil {
+		return errors.Wrap(err, "loadReferencedTable")
+	}
+	for _, colname := range c.ReferencedColumsName {
+
+		refField := c.ReferencedTable.FieldByName(colname)
+		if refField == nil {
+			return errors.Errorf("could not find column %s from table %s", colname, c.ReferencedTable.Name)
+		}
+		c.ReferencedFields = append(c.ReferencedFields, *refField)
 	}
 	return nil
 }
@@ -180,6 +195,49 @@ func (t *Table) SkipBasedOnIdentifiers(identifiers map[string]struct{}) {
 		}
 		log.Debug().Str("field", field.ColumnName).Str("tablename", t.Name).Str("table schema", t.Schema).Bool("skippeable", field.skippeable()).Str("func", "skipBasedOnIdentifiers").Msg("don't skip")
 	}
+}
+
+func (t *Table) AddVirtualFKs(fkeys map[string]string) error {
+	// source and target is in the order of the written query, not necessarily in the logical order
+	// source would be the parent table
+	// target would be the child, which could have had an actual FOREIGN KEY object
+	// so the current t *Table should be the target: it points to a dependency
+	for source, target := range fkeys {
+		sourceTable, sourceCol, ok1 := strings.Cut(source, ".")
+		targetTable, targetCol, ok2 := strings.Cut(target, ".")
+		if !ok1 || !ok2 {
+			log.Debug().Str("key", source).Str("value", target).Str("tablename", t.Name).Str("table schema", t.Schema).Str("func", "AddVirtualFKs").Msg("malformed virtualfk")
+			continue
+		}
+
+		if t.Name == sourceTable { // flipped
+			sourceTable, sourceCol, _ = strings.Cut(target, ".")
+			targetTable, targetCol, _ = strings.Cut(source, ".")
+		} else if t.Name != targetTable { // none matches, so the FK should be created on another *Table
+			continue
+		}
+
+		if _, ok := t.ColToConstraint[targetCol]; ok {
+			continue
+		}
+		constraint := Constraint{
+			ConstraintName:        "VirtualFK_" + targetCol,
+			ReferencedTableSchema: t.Schema, // assuming the schema is the same, good enough for now
+			ReferencedTableName:   sourceTable,
+			ColumnsName:           []string{targetCol},
+			ReferencedColumsName:  []string{sourceCol},
+		}
+		constraint.populateFields(t)
+		err := constraint.loadReferencedTable()
+		if err != nil {
+			return errors.Wrap(err, "AddVirtualFKs")
+		}
+		t.Constraints = append(t.Constraints, constraint)
+	}
+
+	// already called once on the real constraints, but it's safe to call twice to resolve the virtual FKs
+	t.resolveColToConstraints()
+	return nil
 }
 
 func (f *Field) skippeable() bool {
