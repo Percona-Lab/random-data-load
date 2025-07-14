@@ -101,7 +101,7 @@ func TestMain(m *testing.M) {
 	// run tests
 	code := m.Run()
 
-	if code != 0 && os.Getenv("KEEP_DB") == "1" {
+	if code != 0 && keepDB() {
 		log.Printf("Keeping database running because tests failed and KEEP_DB=1")
 		return
 	}
@@ -194,7 +194,7 @@ func TestRun(t *testing.T) {
 			name:       "basic_query",
 			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN c2 IS NULL THEN 1 ELSE 0 END) = 100)  from t1 where c1 is not null;",
 			inputQuery: "select c1 from t1;",
-			engines:    []string{"mysql"},
+			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 
@@ -202,7 +202,7 @@ func TestRun(t *testing.T) {
 			name:       "identifiers_skip_not_null_nodefaults",
 			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN c2 <> '' THEN 1 ELSE 0 END) = 100)  from t1 where c1 is not null;",
 			inputQuery: "select c1 from t1;",
-			engines:    []string{"mysql"},
+			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 
@@ -210,7 +210,7 @@ func TestRun(t *testing.T) {
 			name:       "identifiers_skip_not_null_defaults",
 			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN c2 <> 'test' THEN 1 ELSE 0 END) = 0)  from t1 where c1 is not null;",
 			inputQuery: "select c1 from t1;",
-			engines:    []string{"mysql"},
+			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 
@@ -228,8 +228,8 @@ func TestRun(t *testing.T) {
 			name:       "fk_virtual",
 			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
 			inputQuery: "select * from t1 join t2 on t1.id = t2.t1_id;",
-			engines:    []string{"mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t2"}, []string{"--rows=100", "--table=t1", "--default-relationship=1-1"}},
 		},
 
 		/* not working yet. Will have to wait for proper recursive table load instead of 1 table per execution
@@ -245,7 +245,11 @@ func TestRun(t *testing.T) {
 
 	for _, test := range tests {
 		for _, engine := range test.engines {
-			errlog := fmt.Sprintf("to repeat the test and keep the container running, use KEEP_DB=1 go test .\nengine: %s, container: %s, testname: %s", engine, testsdb[engine].resource.Container.Name, test.name)
+			errlog := fmt.Sprintf("engine: %s, container: %s, testname: %s", engine, testsdb[engine].resource.Container.Name, test.name)
+			if !keepDB() {
+				errlog = fmt.Sprintf("to repeat the test and keep the container running, use KEEP_DB=1 go test .\n%s", errlog)
+			}
+
 			switch engine {
 			case "mysql":
 				errlog += fmt.Sprintf("\ndocker exec -it %s mysql -u dockertest -pdockertest test", testsdb[engine].resource.Container.Name)
@@ -302,4 +306,8 @@ func ddl(engine, name string) error {
 		return fmt.Errorf("failed to exec %s ddl for testname %s: %v", engine, name, err)
 	}
 	return nil
+}
+
+func keepDB() bool {
+	return os.Getenv("KEEP_DB") == "1"
 }

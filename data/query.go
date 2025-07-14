@@ -5,7 +5,10 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"gitlab.com/dalibo/transqlate/ast"
+	"gitlab.com/dalibo/transqlate/lexer"
 	"gitlab.com/dalibo/transqlate/mysql"
+	"gitlab.com/dalibo/transqlate/parser"
+	"gitlab.com/dalibo/transqlate/rewrite"
 )
 
 var aliases = map[string]string{} // only help to identify implicit joins
@@ -21,7 +24,15 @@ func ParseQuery(query, queryFile, engine string) (map[string]struct{}, map[strin
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		//case: "pg":
+	case "pg":
+		parse := func(source, input string) (ast.Node, error) {
+			return parser.Parse(lexer.New(source, input))
+		}
+		engine := rewrite.New("pg", rewrite.Parser(parse))
+		parsed, err = engine.Parse(queryFile, query)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 	default:
 		return nil, nil, nil, errors.New("unimplemented engine")
 	}

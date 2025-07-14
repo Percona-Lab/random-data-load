@@ -50,7 +50,7 @@ func (s *sampleCommon) query(query string, values [][]Getter) error {
 	}
 
 	if rowIdx == 0 {
-		return fmt.Errorf("cannot get samples: %s", errors.Errorf("table %s was empty", "TODO"))
+		return fmt.Errorf("cannot get samples: %s", errors.Errorf("table %s was empty", s.table))
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("cannot get samples: %s", err)

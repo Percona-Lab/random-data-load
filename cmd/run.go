@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/apoorvam/goterminal"
+	"github.com/rs/zerolog/log"
 	"github.com/ylacancellera/random-data-load/data"
 	"github.com/ylacancellera/random-data-load/db"
 	"github.com/ylacancellera/random-data-load/generate"
@@ -47,6 +48,7 @@ func (cmd *RunCmd) Run() error {
 		if err != nil {
 			return err
 		}
+		log.Debug().Interface("identifiers", identifiers).Interface("joins", joins).Msg("query parsed")
 		table.SkipBasedOnIdentifiers(identifiers)
 		table.AddVirtualFKs(joins)
 	}

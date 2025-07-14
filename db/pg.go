@@ -30,11 +30,12 @@ func (postgres Postgres) GetFields(schema, tablename string) ([]Field, error) {
 		column_name, 
 		is_nullable::boolean, 
 		data_type, 
-		character_maximum_length, 
+		coalesce(character_maximum_length, 2000),
 		numeric_precision, 
 		numeric_scale, 
 		CASE WHEN is_identity='YES' THEN 'PRI' else '' END,
-		CASE WHEN identity_generation='ALWAYS' THEN true else false END
+		CASE WHEN identity_generation='ALWAYS' THEN true else false END,
+		column_default is not null
 	FROM information_schema.columns
 	WHERE table_schema=$1 AND table_name=$2`
 
@@ -89,6 +90,7 @@ func (_ Postgres) makeScanRecipients(f *Field, columnType *string, cols []string
 		//&columnType,
 		&f.ColumnKey,
 		&f.AutoIncrement,
+		&f.HasDefaultValue,
 	}
 
 	return fields
