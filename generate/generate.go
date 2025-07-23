@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -147,33 +148,52 @@ func (in *Insert) genQuery(count int64) *string {
 		return nil
 	}
 
+	fieldsAsDefault := in.table.FieldsToInsertAsDefault()
 	fieldsToGen := in.table.FieldsToGenerate()
 	fieldsToSample := in.table.FieldsToSample()
 	var insertQuery strings.Builder
 	_, err := insertQuery.WriteString(fmt.Sprintf(db.InsertTemplate(), //nolint
 		db.Escape(in.table.Schema),
 		db.Escape(in.table.Name),
-		db.EscapedNamesListFromFields(append(fieldsToGen, fieldsToSample...)),
+		db.EscapedNamesListFromFields(slices.Concat(fieldsAsDefault, fieldsToGen, fieldsToSample)),
 	))
 	if err != nil {
 		log.Error().Err(err).Msg("failed to build string")
 	}
-	log.Debug().Str("fieldsToGen", db.EscapedNamesListFromFields(fieldsToGen)).Str("fieldsToSample", db.EscapedNamesListFromFields(fieldsToSample)).Str("table", in.table.Name).Str("schema", in.table.Schema).Msg("genQuery init")
+	log.Debug().Str("fieldsAsDefault", db.EscapedNamesListFromFields(fieldsAsDefault)).
+		Str("fieldsToGen", db.EscapedNamesListFromFields(fieldsToGen)).
+		Str("fieldsToSample", db.EscapedNamesListFromFields(fieldsToSample)).
+		Str("table", in.table.Name).Str("schema", in.table.Schema).Msg("genQuery init")
 
 	// TODO obj pool ?
 	// full init of the 2 layer slice
 	values := make([]InsertValues, count)
 	for i := range values {
-		values[i] = make(InsertValues, len(fieldsToGen)+len(fieldsToSample))
+		values[i] = make(InsertValues, len(fieldsAsDefault)+len(fieldsToGen)+len(fieldsToSample))
 	}
 
 	var wg sync.WaitGroup
+	// fields order; DEFAULTs, then generated, then sampled
+	idxFieldsAsDefault := len(fieldsAsDefault)
+	idxFieldsToGen := idxFieldsAsDefault + len(fieldsToGen)
+
+	if len(fieldsAsDefault) != 0 {
+		wg.Add(1)
+		go func() {
+			for i := int64(0); i < count; i++ {
+				for col := int64(0); col < int64(idxFieldsAsDefault); col++ {
+					values[i][col] = NewDefaultKeyword()
+				}
+			}
+			wg.Done()
+		}()
+	}
 
 	if len(fieldsToGen) != 0 {
 		wg.Add(1)
 		go func() {
 			for i := int64(0); i < count; i++ {
-				generateFieldsRow(fieldsToGen, values[i][:len(fieldsToGen)])
+				generateFieldsRow(fieldsToGen, values[i][idxFieldsAsDefault:idxFieldsToGen])
 			}
 			wg.Done()
 		}()
@@ -188,7 +208,7 @@ func (in *Insert) genQuery(count int64) *string {
 			// it ensures each goroutines work on the main "values" array without overlaps
 			sampledValues := make([][]Getter, count)
 			for i := range sampledValues {
-				sampledValues[i] = values[i][len(fieldsToGen):]
+				sampledValues[i] = values[i][idxFieldsToGen:]
 			}
 			err := in.sampleFieldsTable(fieldsToSample, sampledValues)
 			if err != nil {

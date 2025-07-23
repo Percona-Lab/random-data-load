@@ -229,7 +229,7 @@ func TestRun(t *testing.T) {
 			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
 			inputQuery: "select * from t1 join t2 on t1.id = t2.t1_id;",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--table=t2"}, []string{"--rows=100", "--table=t1", "--default-relationship=1-1"}},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
 		},
 
 		/* not working yet. Will have to wait for proper recursive table load instead of 1 table per execution

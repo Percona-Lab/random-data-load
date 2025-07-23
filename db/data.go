@@ -147,6 +147,25 @@ func (t *Table) FieldByName(name string) *Field {
 	return nil
 }
 
+// only needed for pg, but mysql does not mind
+// you can't "insert into sometable () values ()" in pg, it will require at least
+// insert into sometable (id) values (default)
+func (t *Table) FieldsToInsertAsDefault() []Field {
+	fields := []Field{}
+
+	// let's skip this when possible
+	if len(t.FieldsToGenerate())+len(t.FieldsToSample()) != 0 {
+		return fields
+	}
+
+	for _, field := range t.Fields {
+		if !field.IsNullable && field.ColumnKey == "PRI" && field.AutoIncrement {
+			fields = append(fields, field)
+		}
+	}
+	return fields
+}
+
 func (t *Table) FieldsToGenerate() []Field {
 	fields := []Field{}
 
@@ -280,26 +299,34 @@ func AddVirtualFKs(tables []*Table, fkeys map[string]string) error {
 		targetTable, targetCol, _ := strings.Cut(target, ".")
 
 		var table *Table
-		tableIdx := slices.IndexFunc(tables, func(t *Table) bool { return t.Name == sourceTable })
-		targetTableIdx := slices.IndexFunc(tables, func(t *Table) bool { return t.Name == targetTable })
-		switch {
-		case tableIdx != -1 && targetTableIdx != -1:
-			// sets virtual FK on tables with the most fk already
-			// a table without foreign keys will ensure the tool can run with no additional actions
-			if len(tables[targetTableIdx].Constraints) > len(tables[tableIdx].Constraints) {
-				table = tables[targetTableIdx]
-			} else {
-				table = tables[tableIdx]
-			}
-		case tableIdx != -1:
-			table = tables[tableIdx]
-		case targetTableIdx != -1:
-			table = tables[targetTableIdx]
-		default:
-			log.Warn().Str("key", source).Str("value", target).Str("func", "AddVirtualFKs").Msg("none of those tables are loaded")
+		// source is parent, target is child. Constraints are on child side
+		tableIdx := slices.IndexFunc(tables, func(t *Table) bool { return t.Name == targetTable })
+		if tableIdx == -1 {
+			log.Debug().Str("key", source).Str("value", target).Str("func", "AddVirtualFKs").Msg("table not loaded")
 			continue
-
 		}
+		table = tables[tableIdx]
+		/*
+			sourceTableIdx := slices.IndexFunc(tables, func(t *Table) bool { return t.Name == sourceTable })
+				switch {
+				case tableIdx != -1 && sourceTableIdx != -1:
+					// sets virtual FK on tables with the most fk already
+					// a table without foreign keys will ensure the tool can run with no additional actions
+					if len(tables[sourceTableIdx].Constraints) > len(tables[tableIdx].Constraints) {
+						table = tables[sourceTableIdx]
+					} else {
+						table = tables[tableIdx]
+					}
+				case tableIdx != -1:
+					table = tables[tableIdx]
+				case sourceTableIdx != -1:
+					table = tables[sourceTableIdx]
+				default:
+					log.Warn().Str("key", source).Str("value", target).Str("func", "AddVirtualFKs").Msg("none of those tables are loaded")
+					continue
+
+				}
+		*/
 
 		constraint := Constraint{
 			ConstraintName:        "VirtualFK_" + targetCol,
