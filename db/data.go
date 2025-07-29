@@ -17,7 +17,7 @@ type Table struct {
 	Name   string
 	Fields []Field
 	//Indexes     map[string]Index
-	Constraints     []Constraint
+	Constraints     []*Constraint
 	ColToConstraint map[string]*Constraint
 }
 
@@ -31,14 +31,15 @@ type Index struct {
 */
 // Constraint holds Foreign Keys information
 type Constraint struct {
-	ConstraintName        string
-	ReferencedTableSchema string
-	ReferencedTableName   string
-	ColumnsName           []string // sorted by ordinal_position
-	ReferencedColumsName  []string
-	Fields                []Field
-	ReferencedFields      []Field
-	ReferencedTable       *Table
+	ConstraintName              string
+	ReferencedTableSchema       string
+	ReferencedTableName         string
+	ColumnsName                 []string // sorted by ordinal_position
+	ReferencedColumsName        []string
+	Fields                      []Field
+	ReferencedFields            []Field
+	ReferencedTable             *Table
+	willBeInsertedDuringThisRun bool
 }
 
 // Field holds raw field information as defined in INFORMATION_SCHEMA
@@ -102,7 +103,7 @@ func LoadTable(database, tablename string) (*Table, error) {
 func (t *Table) resolveColToConstraints() {
 	for _, constraint := range t.Constraints {
 		for _, colname := range constraint.ColumnsName {
-			t.ColToConstraint[colname] = &constraint
+			t.ColToConstraint[colname] = constraint
 		}
 	}
 }
@@ -201,6 +202,15 @@ func (t *Table) FieldsToSample() []Field {
 		}
 	}
 	return fields
+}
+
+func (t *Table) FlagConstraintThatArePartsOfThisRun(tables []*Table) {
+	for _, constraint := range t.Constraints {
+		if slices.IndexFunc(tables, func(t2 *Table) bool { return t2.Name == constraint.ReferencedTableName }) != -1 {
+			constraint.willBeInsertedDuringThisRun = true
+		}
+		log.Debug().Bool("willBeInsertedDuringThisRun", constraint.willBeInsertedDuringThisRun).Str("constraint", constraint.ConstraintName).Str("tablename", t.Name).Str("table schema", t.Schema).Str("func", "FlagConstraintThatArePartsOfThisRun").Msg("output")
+	}
 }
 
 func (t *Table) SkipBasedOnIdentifiers(identifiers map[string]struct{}) {
@@ -340,7 +350,7 @@ func AddVirtualFKs(tables []*Table, fkeys map[string]string) error {
 		if err != nil {
 			return errors.Wrap(err, "AddVirtualFKs")
 		}
-		table.Constraints = append(table.Constraints, constraint)
+		table.Constraints = append(table.Constraints, &constraint)
 		delete(fkeys, source)
 
 		// already called once on the real constraints, but it's safe to call twice to resolve the virtual FKs
@@ -348,6 +358,50 @@ func AddVirtualFKs(tables []*Table, fkeys map[string]string) error {
 	}
 
 	return nil
+}
+
+// sort the tables so that dependencies are inserted first
+func SortTables(tables []*Table) []*Table {
+
+	slices.SortFunc(tables, func(a, b *Table) int {
+		return len(a.Constraints) - len(b.Constraints)
+	})
+	tablesSorted := make([]*Table, 0, cap(tables))
+	tablesIndexes := make([]int, len(tables), cap(tables))
+
+	// we get a slice for indexes of the main "tables" slices
+	// we want to keep the "tables" untouched and reorganize it, tablesIndexes will track what is left to handle
+	for i := 0; i < len(tables); i++ {
+		tablesIndexes[i] = i
+	}
+
+INSERT_LOOP:
+	for len(tablesIndexes) > 0 {
+		for metaIndex, idx := range tablesIndexes {
+			if tables[idx].AreAllDependenciesContained(tablesSorted) {
+				log.Debug().Str("table", tables[idx].Name).Msg("all dep are contained, adding to running order")
+				tablesSorted = append(tablesSorted, tables[idx])
+				tablesIndexes = slices.Delete(tablesIndexes, metaIndex, metaIndex+1)
+				continue INSERT_LOOP
+			}
+			log.Debug().Str("table", tables[idx].Name).Msg("not all deps are contained, continue")
+		}
+	}
+	return tablesSorted
+}
+
+// are all dependencies/referenced tables present in this list of tables
+func (t *Table) AreAllDependenciesContained(tables []*Table) bool {
+	for _, constraint := range t.Constraints {
+		// if some tables won't be part of this run, we should not wait for this dependencies to be "loaded" already in the table running order
+		if !constraint.willBeInsertedDuringThisRun {
+			continue
+		}
+		if slices.IndexFunc(tables, func(t2 *Table) bool { return t2.Name == constraint.ReferencedTableName }) == -1 {
+			return false
+		}
+	}
+	return true
 }
 
 func (f *Field) skippeable() bool {

@@ -1,0 +1,19 @@
+CREATE TABLE t1(
+	id int,
+	data varchar(30)
+);
+CREATE TABLE t2(
+	id int,
+	t1_id int,
+	data varchar(30)
+);
+CREATE TABLE t3(
+	id int,
+	t2_id int,
+	data varchar(30)
+);
+CREATE TABLE t4(
+	id int,
+	t3_id int,
+	data varchar(30)
+);

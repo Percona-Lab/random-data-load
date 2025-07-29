@@ -1,0 +1,16 @@
+CREATE TABLE t1(
+	id bigint generated always as identity primary key
+);
+CREATE TABLE t2(
+	id bigint generated always as identity primary key,
+	t1_id bigint references t1(id)
+);
+CREATE TABLE t3(
+	id bigint generated always as identity primary key,
+	t2_id bigint references t2(id)
+);
+CREATE TABLE t4(
+	id bigint generated always as identity primary key,
+	t2_id bigint references t2(id),
+	t3_id bigint references t3(id)
+);

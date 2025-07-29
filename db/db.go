@@ -22,7 +22,7 @@ var (
 type Engine interface {
 	Connect(Config) (*sql.DB, error)
 	GetFields(string, string) ([]Field, error)
-	GetConstraints(string, string) ([]Constraint, error)
+	GetConstraints(string, string) ([]*Constraint, error)
 	InsertTemplate() string
 	Escape(string) string
 	SetTableMetadata(*Table, string, string)
@@ -55,7 +55,7 @@ func GetFields(schema, table string) ([]Field, error) {
 	return engine.GetFields(schema, table)
 }
 
-func GetConstraints(schema, table string) ([]Constraint, error) {
+func GetConstraints(schema, table string) ([]*Constraint, error) {
 	return engine.GetConstraints(schema, table)
 }
 

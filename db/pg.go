@@ -96,7 +96,7 @@ func (_ Postgres) makeScanRecipients(f *Field, columnType *string, cols []string
 	return fields
 }
 
-func (_ Postgres) GetConstraints(schema, tablename string) ([]Constraint, error) {
+func (_ Postgres) GetConstraints(schema, tablename string) ([]*Constraint, error) {
 	query := `
 SELECT c.constraint_name, 
 	y.table_schema as referenced_schema_name, 
@@ -120,7 +120,7 @@ ORDER BY c.constraint_name;
 	}
 	defer rows.Close()
 
-	constraints := []Constraint{}
+	constraints := []*Constraint{}
 
 	for rows.Next() {
 		var c Constraint
@@ -132,7 +132,7 @@ ORDER BY c.constraint_name;
 		}
 		c.ColumnsName = strings.Split(columnsNameAgg, ";")
 		c.ReferencedColumsName = strings.Split(refColumnsNameAgg, ";")
-		constraints = append(constraints, c)
+		constraints = append(constraints, &c)
 
 	}
 

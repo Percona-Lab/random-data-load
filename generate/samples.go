@@ -12,7 +12,7 @@ type Sampler interface {
 	Sample() error
 }
 
-type SamplerBuilder func([]db.Field, string, string, [][]Getter) Sampler
+type SamplerBuilder func([]db.Field, string, string, string, [][]Getter) Sampler
 
 type sampleCommon struct {
 	schema string
@@ -22,6 +22,7 @@ type sampleCommon struct {
 
 func (s *sampleCommon) query(query string, values [][]Getter) error {
 
+	log.Debug().Str("query", query).Str("tablename", s.table).Str("schema", s.schema).Msg("query")
 	rows, err := db.DB.Query(query)
 	if err != nil {
 		return fmt.Errorf("cannot get samples: %s, %s", query, err)
@@ -55,7 +56,6 @@ func (s *sampleCommon) query(query string, values [][]Getter) error {
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("cannot get samples: %s", err)
 	}
-	log.Debug().Str("query", query).Str("tablename", s.table).Str("schema", s.schema).Msg("query")
 	return nil
 }
 
@@ -95,18 +95,18 @@ func (s *UniformSample) Sample() error {
 
 var storedUniformSamples = map[string]*UniformSample{}
 
-func NewUniformSample(fields []db.Field, schema, name string, values [][]Getter) Sampler {
-	if s, ok := storedUniformSamples[name]; ok {
+func NewUniformSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter) Sampler {
+	if s, ok := storedUniformSamples[tablename+constraintName]; ok {
 		s.values = values
 		return s
 	}
 	s := &UniformSample{}
-	s.table = name
+	s.table = tablename
 	s.schema = schema
 	s.limit = len(values)
 	s.values = values
 	s.fields = fields
-	storedUniformSamples[name] = s
+	storedUniformSamples[tablename+constraintName] = s
 	return s
 }
 
@@ -124,7 +124,7 @@ func (s *DBRandomSample) Sample() error {
 	return s.query(query, s.values)
 }
 
-func NewDBRandomSample(fields []db.Field, schema, name string, values [][]Getter) Sampler {
+func NewDBRandomSample(fields []db.Field, schema, name, _ string, values [][]Getter) Sampler {
 	s := &DBRandomSample{}
 	s.table = name
 	s.schema = schema

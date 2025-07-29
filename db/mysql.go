@@ -155,7 +155,7 @@ func (_ MySQL) makeScanRecipients(f *Field, columnType *string, cols []string) [
 
 	return fields
 }
-func (_ MySQL) GetConstraints(schema, tableName string) ([]Constraint, error) {
+func (_ MySQL) GetConstraints(schema, tableName string) ([]*Constraint, error) {
 	query := `SELECT tc.CONSTRAINT_NAME,
 		kcu.REFERENCED_TABLE_SCHEMA,
 		kcu.REFERENCED_TABLE_NAME,
@@ -174,7 +174,7 @@ func (_ MySQL) GetConstraints(schema, tableName string) ([]Constraint, error) {
 	}
 	defer rows.Close()
 
-	constraints := []Constraint{}
+	constraints := []*Constraint{}
 
 	for rows.Next() {
 		var c Constraint
@@ -186,7 +186,7 @@ func (_ MySQL) GetConstraints(schema, tableName string) ([]Constraint, error) {
 		}
 		c.ColumnsName = strings.Split(columnsNameAgg, ";")
 		c.ReferencedColumsName = strings.Split(refColumnsNameAgg, ";")
-		constraints = append(constraints, c)
+		constraints = append(constraints, &c)
 	}
 
 	return constraints, nil

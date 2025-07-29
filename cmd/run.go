@@ -6,8 +6,6 @@ import (
 	"os"
 	"sync"
 
-	"slices"
-
 	"github.com/apoorvam/goterminal"
 	"github.com/rs/zerolog/log"
 	"github.com/ylacancellera/random-data-load/data"
@@ -58,7 +56,8 @@ func (cmd *RunCmd) Run() error {
 		tablesNames = map[string]struct{}{cmd.Table: struct{}{}}
 	}
 
-	tablesSorted := []*db.Table{}
+	// loading base tables
+	tables := []*db.Table{}
 	for tableKey := range tablesNames {
 		table, err := db.LoadTable(cmd.DB.Database, tableKey)
 		if err != nil {
@@ -68,21 +67,25 @@ func (cmd *RunCmd) Run() error {
 		if cmd.hasQuery() {
 			table.SkipBasedOnIdentifiers(identifiers)
 		}
-		tablesSorted = append(tablesSorted, table)
-	}
-	db.FilterVirtualFKs(tablesSorted, joins)
-	db.AddVirtualFKs(tablesSorted, joins)
 
-	// sort from the tables with least constraints to table with most constraint
-	// TODO: could disable the FK for which we don't have the table anyway
-	slices.SortFunc(tablesSorted, func(a, b *db.Table) int {
-		return len(a.Constraints) - len(b.Constraints)
-	})
+		tables = append(tables, table)
+	}
+	// now we have the full table list, we can autocomplete foreign keys
+	db.FilterVirtualFKs(tables, joins)
+	db.AddVirtualFKs(tables, joins)
+	// and identify which constraints should be "garanteed" for this run
+	for _, table := range tables {
+		table.FlagConstraintThatArePartsOfThisRun(tables)
+	}
+	// so that we can sort based on the dependencies we need to satisfy
+	tablesSorted := db.SortTables(tables)
 
 	for _, table := range tablesSorted {
 		log.Debug().Str("table", table.Name).Int("number of constraint", len(table.Constraints)).Msg("tables sorted")
 	}
 
+	// one at a time.
+	// Parallelizing here will complexify the foreign links, for probably not so much gain
 	for _, table := range tablesSorted {
 		_, err = cmd.run(table)
 	}
@@ -96,7 +99,7 @@ func (cmd *RunCmd) run(table *db.Table) (int64, error) {
 
 	if !cmd.Quiet && !cmd.DryRun {
 		wg.Add(1)
-		startProgressBar(cmd.Rows, ins.NotifyChan(), wg)
+		startProgressBar(table.Name, cmd.Rows, ins.NotifyChan(), wg)
 	}
 
 	if cmd.DryRun {
@@ -112,14 +115,14 @@ func (cmd *RunCmd) hasQuery() bool {
 	return cmd.Query != "" || cmd.QueryFile != ""
 }
 
-func startProgressBar(total int64, c chan int64, wg *sync.WaitGroup) {
+func startProgressBar(tablename string, total int64, c chan int64, wg *sync.WaitGroup) {
 	go func() {
 		writer := goterminal.New(os.Stdout)
 		var count int64
 		for n := range c {
 			count += n
 			writer.Clear()
-			fmt.Fprintf(writer, "Writing (%d/%d) rows...\n", count, total)
+			fmt.Fprintf(writer, "Writing %s (%d/%d) rows...\n", tablename, count, total)
 			writer.Print() //nolint
 		}
 		writer.Reset()

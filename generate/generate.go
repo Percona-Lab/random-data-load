@@ -311,7 +311,7 @@ func (in *Insert) sampleFieldsTable(fields []db.Field, values [][]Getter) error 
 		}
 
 		samplerInit := in.fklinks.relationship(in.table.Name, constraint.ReferencedTableName)
-		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, subSlice)
+		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlice)
 		err = sampler.Sample()
 		if err != nil {
 			return errors.Wrap(err, "sampleFieldsTable")

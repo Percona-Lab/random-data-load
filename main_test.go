@@ -223,6 +223,22 @@ func TestRun(t *testing.T) {
 				cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
 			},
 		*/
+		{
+			name: "fk_cascade_recursive",
+			// t1 alone, t2 dep on t1, t3 dep on t2 and t4 dep on t2+t3
+			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id join t3 on t2.id = t3.t2_id join t4 on t3.id = t4.t3_id and t2.id = t4.t2_id;",
+			inputQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id join t3 on t2.id = t3.t2_id join t4 on t3.id = t4.t3_id and t2.id = t4.t2_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=1-1"}},
+		},
+		{
+			// same as above, but with the query join order reversed
+			name:       "fk_cascade_recursive_reversed",
+			checkQuery: "select count(*) = 100 from t4 join t2 on t2.id = t4.t2_id join t3 on t3.id = t4.t3_id and t3.t2_id = t2.id join t1 on t1.id = t2.t1_id;",
+			inputQuery: "select count(*) = 100 from t4 join t2 on t2.id = t4.t2_id join t3 on t3.id = t4.t3_id and t3.t2_id = t2.id join t1 on t1.id = t2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=1-1"}},
+		},
 
 		{
 			name:       "fk_virtual",
@@ -232,15 +248,20 @@ func TestRun(t *testing.T) {
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
 		},
 
-		/* not working yet. Will have to wait for proper recursive table load instead of 1 table per execution
 		{
-			name:       "fk_virtual_cascade",
+			name:       "fk_virtual_cascade_table_per_table",
 			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id join t3 on t2.id = t3.t2_id join t4 on t3.id = t4.t3_id;",
 			inputQuery: "select * from t1 join t2 on t1.id = t2.t1_id join t3 on t2.id = t3.t2_id join t4 on t3.id = t4.t3_id;",
-			engines:    []string{"mysql"},
+			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}, []string{"--rows=100", "--table=t3", "--default-relationship=1-1"}, []string{"--rows=100", "--table=t4", "--default-relationship=1-1"}},
 		},
-		*/
+		{
+			name:       "fk_virtual_cascade_recursive",
+			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id join t3 on t2.id = t3.t2_id join t4 on t3.id = t4.t3_id;",
+			inputQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id join t3 on t2.id = t3.t2_id join t4 on t3.id = t4.t3_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=1-1"}},
+		},
 	}
 
 	for _, test := range tests {
