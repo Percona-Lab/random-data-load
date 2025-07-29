@@ -26,6 +26,8 @@ type RunCmd struct {
 	QueryFile string `help:"see --query. Accepts a path instead of a direct query"`
 
 	generate.ForeignKeyLinks
+	VirtualForeignKeys         map[string]string `name:"virtual-foreign-keys" help:"add additional foreign keys, if they are not explicitely created in the table schema. The format must be parent_table.col1=child_table.col2. It will overwrite every JOINs guessed from queries. Example --virtual-foreign-keys=\"customers.id=purchases.customer_id;purchases.id=items.purchase_id\"" xor:"virtualfk"`
+	SkipAutoVirtualForeignKeys bool              `name:"skip-auto-virtual-foreign-keys" help:"disable foreign key autocomplete. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only." xor:"virtualfk"`
 }
 
 // Run starts inserting data.
@@ -56,6 +58,10 @@ func (cmd *RunCmd) Run() error {
 		tablesNames = map[string]struct{}{cmd.Table: struct{}{}}
 	}
 
+	if len(cmd.VirtualForeignKeys) > 0 {
+		joins = cmd.VirtualForeignKeys
+	}
+
 	// loading base tables
 	tables := []*db.Table{}
 	for tableKey := range tablesNames {
@@ -71,8 +77,10 @@ func (cmd *RunCmd) Run() error {
 		tables = append(tables, table)
 	}
 	// now we have the full table list, we can autocomplete foreign keys
-	db.FilterVirtualFKs(tables, joins)
-	db.AddVirtualFKs(tables, joins)
+	if !cmd.SkipAutoVirtualForeignKeys {
+		db.FilterVirtualFKs(tables, joins)
+		db.AddVirtualFKs(tables, joins)
+	}
 	// and identify which constraints should be "garanteed" for this run
 	for _, table := range tables {
 		table.FlagConstraintThatArePartsOfThisRun(tables)

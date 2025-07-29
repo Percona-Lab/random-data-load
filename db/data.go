@@ -280,7 +280,7 @@ func FilterVirtualFKs(tables []*Table, fkeys map[string]string) {
 		sourceTable, sourceCol, ok1 := strings.Cut(source, ".")
 		targetTable, targetCol, ok2 := strings.Cut(target, ".")
 		if !ok1 || !ok2 {
-			log.Debug().Str("key", source).Str("value", target).Str("func", "FilterVirtualFKs").Msg("malformed virtualfk")
+			log.Warn().Str("key", source).Str("value", target).Str("func", "FilterVirtualFKs").Msg("malformed virtual foreign key. Both key and value should look like {table}.{col}")
 			delete(fkeys, source)
 			continue
 		}

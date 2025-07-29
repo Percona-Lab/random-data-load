@@ -9,6 +9,7 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 	"github.com/ylacancellera/random-data-load/cmd"
 	"github.com/ylacancellera/random-data-load/generate"
 )
@@ -27,7 +28,8 @@ var (
 var buildInfo = fmt.Sprintf("%s\nVersion %s\nBuild: %s using %s\nCommit: %s", toolname, Version, Build, GoVersion, Commit)
 
 var cli struct {
-	Run         cmd.RunCmd `cmd:"run" help:"Starts the insert process"`
+	Run         cmd.RunCmd   `cmd:"run" help:"Starts the insert process"`
+	Query       cmd.QueryCmd `cmd:"query"`
 	Version     kong.VersionFlag
 	Profile     bool   `name:"pprof"`
 	CPUProfPath string `name:"cpu-prof-path" default:"cpu.prof"`
@@ -54,6 +56,7 @@ func main() {
 	if cli.Debug {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
 	if cli.Profile {
 		f, err := os.Create(cli.CPUProfPath)
