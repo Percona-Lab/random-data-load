@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime/pprof"
 
+	"net/http"
 	_ "net/http/pprof"
 
 	"github.com/alecthomas/kong"
@@ -64,6 +65,10 @@ func main() {
 			panic(err)
 		}
 		defer f.Close()
+
+		go func() {
+			http.ListenAndServe("localhost:6060", nil)
+		}()
 
 		// Start CPU profiling
 		if err := pprof.StartCPUProfile(f); err != nil {

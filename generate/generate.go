@@ -16,10 +16,12 @@ import (
 )
 
 type Insert struct {
-	table      *db.Table
-	writer     io.Writer
-	notifyChan chan int64
-	fklinks    ForeignKeyLinks
+	table        *db.Table
+	writer       io.Writer
+	notifyChan   chan int64
+	fklinks      ForeignKeyLinks
+	workersCount int
+	insertMutex  sync.Mutex
 }
 
 type ForeignKeyLinks struct {
@@ -63,11 +65,12 @@ var (
 )
 
 // New returns a new Insert instance.
-func New(table *db.Table, fklinks ForeignKeyLinks) *Insert {
+func New(table *db.Table, fklinks ForeignKeyLinks, workersCount int) *Insert {
 	return &Insert{
-		table:   table,
-		writer:  os.Stdout,
-		fklinks: fklinks,
+		table:        table,
+		writer:       os.Stdout,
+		fklinks:      fklinks,
+		workersCount: workersCount,
 	}
 }
 
@@ -86,16 +89,16 @@ func (in *Insert) NotifyChan() chan int64 {
 }
 
 // Run starts the insert process.
-func (in *Insert) Run(count, bulksize int64) (int64, error) {
+func (in *Insert) Run(count, bulksize int64) error {
 	return in.run(count, bulksize, false)
 }
 
 // DryRun starts writing the generated queries to the specified writer.
-func (in *Insert) DryRun(count, bulksize int64) (int64, error) {
+func (in *Insert) DryRun(count, bulksize int64) error {
 	return in.run(count, bulksize, true)
 }
 
-func (in *Insert) run(count int64, bulksize int64, dryRun bool) (int64, error) {
+func (in *Insert) run(count int64, bulksize int64, dryRun bool) error {
 	if in.notifyChan != nil {
 		defer close(in.notifyChan)
 	}
@@ -112,24 +115,39 @@ func (in *Insert) run(count int64, bulksize int64, dryRun bool) (int64, error) {
 	//                                     1        2       3
 	completeInserts := count / bulksize
 	remainder := count - completeInserts*bulksize
+	numJobs := completeInserts + 1 // + remainder
 
-	var n, okCount int64
-	var err error
+	bulksizeJobs := make(chan int64, numJobs)
+	errChan := make(chan error, numJobs)
+	defer close(bulksizeJobs)
+	defer close(errChan)
 
-	for i := int64(0); i < completeInserts; i++ {
-		n, err = in.insert(bulksize, dryRun)
-		okCount += n
-		if err != nil {
-			return okCount, err
-		}
-		in.notify(n)
+	for w := 1; w <= in.workersCount; w++ {
+		go in.worker(errChan, bulksizeJobs, dryRun)
 	}
 
-	n, err = in.insert(remainder, dryRun)
-	okCount += n
-	in.notify(n)
+	for i := int64(0); i < completeInserts; i++ {
+		bulksizeJobs <- bulksize
+	}
 
-	return okCount, err
+	bulksizeJobs <- remainder
+
+	for j := 1; j <= int(numJobs); j++ {
+		err := <-errChan
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (in *Insert) worker(errChan chan<- error, bulksizeJobs <-chan int64, dryRun bool) {
+	for bulksize := range bulksizeJobs {
+		n, err := in.insert(bulksize, dryRun)
+		errChan <- err
+		in.notify(n)
+	}
 }
 
 func (in *Insert) notify(n int64) {
@@ -247,6 +265,8 @@ func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
 		return count, nil
 	}
 
+	in.insertMutex.Lock()
+	defer in.insertMutex.Unlock()
 	res, err := db.DB.Exec(*insertQuery)
 	if err != nil {
 		log.Error().Str("query", *insertQuery).Err(err).Msg("failed to insert")

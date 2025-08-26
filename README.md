@@ -165,10 +165,11 @@ There are binaries available for each version for Linux and Darwin. You can find
 https://github.com/Percona-Lab/mysql_random_data_load/releases
 
 ## To do
-- [ ] Add suport for all data types.
-- [X] Add supporrt for foreign keys.
-- [ ] Support config files to override default values/ranges.
-- [ ] Support custom functions via LUA plugins.
+- [ ] simple recurse loading
+- [ ] pareto random function
+- [ ] gaussian random function
+- [ ] helpers to get schema (generate pgdump/mysqldump commands, get index stats, ...)
+- [ ] import col/index stats and reproduce data distribution
 
 ## Version history
 

@@ -2,6 +2,7 @@ package generate
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
@@ -81,15 +82,20 @@ type UniformSample struct {
 	sampleCommon
 	values     [][]Getter
 	limit      int
-	lastOffset int // paging by offset is bad, but it prevents dealing with compound pk, lack of pk, or complex pk types
+	lastOffset int // paging by offset is bad, but it will work with compound pk, lack of pk, or complex pk types
+	mutex      sync.Mutex
 }
 
 func (s *UniformSample) Sample() error {
 
+	// choosing a chunk + updating lastOffset is the only part that require exclusive access
+	s.mutex.Lock()
 	query := fmt.Sprintf("SELECT %s FROM %s.%s LIMIT %d OFFSET %d",
 		db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table), s.limit, s.lastOffset)
 
 	s.lastOffset += s.limit
+	s.mutex.Unlock()
+
 	return s.query(query, s.values)
 }
 
