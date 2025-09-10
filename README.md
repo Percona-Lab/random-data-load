@@ -1,5 +1,5 @@
-# Random data generator for MySQL
-[![Build Status](https://travis-ci.org/Percona-Lab/mysql_random_data_load.svg?branch=master)](https://travis-ci.org/Percona-Lab/mysql_random_data_load)
+# Random data generator for MySQL and PostgreSQL
+Forked from https://github.com/Percona-Lab/mysql_random_data_load
 
 Many times in my job I need to generate random data for a specific table in order to reproduce an issue.  
 After writing many random generators for every table, I decided to write a random data generator, able to get the table structure and generate random data for it.  
@@ -12,6 +12,7 @@ This is an early stage project.
 
 |Field type|Generated values|
 |----------|----------------|
+|bool|false ~ true|
 |tinyint|0 ~ 0xFF|
 |smallint|0 ~ 0XFFFF|
 |mediumint|0 ~ 0xFFFFFF|
@@ -29,12 +30,12 @@ This is an early stage project.
 |year|Current year - 1 ~ current year|
 |tinyblob|up to 100 chars random paragraph|
 |tinytext|up to 100 chars random paragraph|
-|blob|up to 100 chars random paragraph|
-|text|up to 100 chars random paragraph|
-|mediumblob|up to 100 chars random paragraph|
-|mediumtext|up to 100 chars random paragraph|
-|longblob|up to 100 chars random paragraph|
-|longtext|up to 100 chars random paragraph|
+|blob|up to --max-blob-size chars random paragraph|
+|text|up to --max-text-size chars random paragraph|
+|mediumblob|up to --max-blob-size chars random paragraph|
+|mediumtext|up to --max-text-size chars random paragraph|
+|longblob|up to --max-blob-size chars random paragraph|
+|longtext|up to --max-text-size chars random paragraph|
 |varbinary|up to 100 chars random paragraph|
 |enum|A random item from the valid items list|
 |set|A random item from the valid items list|
@@ -48,22 +49,28 @@ This is an early stage project.
 The program can detect if a field accepts NULLs and if it does, it will generate NULLs ramdomly (~ 10 % of the values).
 
 ## Usage
-`mysql_random_data_load <database> <table> <number of rows> [options...]`
+`random-data-load run --database=<database> <table> <number of rows> [options...]`
 
 ## Options
 |Option|Description|
 |------|-----------|
-|--bulk-size|Number of rows per INSERT statement (Default: 1000)|
-|--debug|Show some debug information|
-|--fk-samples-factor|Percentage used to get random samples for foreign keys fields. Default 0.3|
+|--engine|mysql/pg|
 |--host|Host name/ip|
-|--max-fk-samples|Maximum number of samples for fields having foreign keys constarints. Default: 100|
-|--max-retries|Maximum number of rows to retry in case of errors. See duplicated keys. Deafult: 100|
-|--no-progressbar|Skip showing the progress bar. Default: false|
+|--user|Username|
 |--password|Password|
 |--port|Port number|
-|--Print|Print queries to the standard output instead of inserting them into the db|
-|--user|Username|
+|--bulk-size|Number of rows per INSERT statement (Default: 1000)|
+|--table|Which table to insert to. It will be ignored when a query is included with either --query or --query-file|
+|--query|Providing a query will analyze its schema usage, insert recursively into tables, and identify implicit joins|
+|--query-file|See --query. Accepts a path instead of a direct query|
+|--debug|Show some debug information|
+|--default-relationship|Sets the default strategy to use for foreign key relationships (Values: 1-1, db-random-1-n; Default: db-random-1-n)
+|--db-random-1-n|Overrides the default relationship strategy. Uses postgres' tablesamples Bernouilli random or mysql RAND() < 0.1. (Example: --db-random-1-n="table=ReferencedTable;orders=customers;items=orders")|
+|--virtual-foreign-keys|Add additional foreign keys, if they are not explicitly created in the table schema. The format must be parent_table.col1=child_table.col2. It will overwrite every JOIN guessed from queries. (Example --virtual-foreign-keys="customers.id=purchases.customer_id;purchases.id=items.purchase_id")|
+|--skip-auto-virtual-foreign-keys|Disables foreign key autocomplete. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitly created in the database objects. This flag will make the tool stick to the constraints defined in the database only.|
+|--pprof|Generate pprof trace at --cpu-prof-path. Also opens port 6060 for pprof go tool|
+|--quiet|Do not print progress bar|
+|--dry-run|Print queries to the standard output instead of inserting them into the db|
 |--version|Show version and exit|
 
 ## Foreign keys support
@@ -165,7 +172,7 @@ There are binaries available for each version for Linux and Darwin. You can find
 https://github.com/Percona-Lab/mysql_random_data_load/releases
 
 ## To do
-- [ ] simple recurse loading
+- [ ] recurse loading without queries
 - [ ] pareto random function
 - [ ] gaussian random function
 - [ ] helpers to get schema (generate pgdump/mysqldump commands, get index stats, ...)
@@ -222,4 +229,5 @@ https://github.com/Percona-Lab/mysql_random_data_load/releases
 
 #### 0.1.0
 - Initial version
+
 
