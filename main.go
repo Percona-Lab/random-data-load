@@ -32,7 +32,7 @@ var cli struct {
 	Run         cmd.RunCmd   `cmd:"run" help:"Starts the insert process"`
 	Query       cmd.QueryCmd `cmd:"query"`
 	Version     kong.VersionFlag
-	Profile     bool   `name:"pprof"`
+	Profile     bool   `name:"pprof" help:"generate pprof trace at --cpu-prof-path. Also opens port 6060 for pprof go tool"`
 	CPUProfPath string `name:"cpu-prof-path" default:"cpu.prof"`
 	Debug       bool   `name:"debug"`
 }
@@ -66,6 +66,7 @@ func main() {
 		}
 		defer f.Close()
 
+		// for other types of profiles like mutexes, mem
 		go func() {
 			http.ListenAndServe("localhost:6060", nil)
 		}()

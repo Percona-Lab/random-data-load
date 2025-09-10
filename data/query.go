@@ -46,19 +46,30 @@ func ParseQuery(query, queryFile, engine string) (map[string]struct{}, map[strin
 func traverseIdentifiers(n ast.Node) map[string]struct{} {
 	identifiers := map[string]struct{}{}
 
+	emptyMap := false
+
 	// don't need to iterate over selected columns, joins, where, group bys
 	// having every raw identifiers will be good enough since it's used as a whitelist
 	// it might have collisions down the line, but at worst it would only generate data on some extra column
 	traverser := func(n ast.Node) bool {
 		switch n := n.(type) {
 		case ast.Leaf:
-			if n.IsIdentifier() {
+			switch {
+			case n.IsIdentifier():
 				identifiers[n.Token.Str] = struct{}{}
+			case n.Token.Type == lexer.Punctuation && n.Token.Raw == "*":
+				log.Debug().Type("node", n).Str("function", "traverseIdentifiers").Msg("cancelling identifiers, found '*'")
+				emptyMap = true
+				return false
 			}
+
 		}
 		return true
 	}
 	n.Traverse(traverser)
+	if emptyMap {
+		return map[string]struct{}{}
+	}
 	return identifiers
 }
 

@@ -215,6 +215,9 @@ func (t *Table) FlagConstraintThatArePartsOfThisRun(tables []*Table) {
 
 func (t *Table) SkipBasedOnIdentifiers(identifiers map[string]struct{}) {
 	log.Debug().Interface("identifiers", identifiers).Str("tablename", t.Name).Str("table schema", t.Schema).Str("func", "skipBasedOnIdentifiers").Msg("init")
+	if len(identifiers) == 0 {
+		return
+	}
 	for i, field := range t.Fields {
 		if _, ok := identifiers[field.ColumnName]; !ok && field.skippeable() {
 			log.Debug().Str("field", field.ColumnName).Str("tablename", t.Name).Str("table schema", t.Schema).Str("func", "skipBasedOnIdentifiers").Msg("set skip")

@@ -262,6 +262,14 @@ func TestRun(t *testing.T) {
 			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=1-1"}},
 		},
+
+		{
+			name:       "star_query",
+			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN c2 IS NOT NULL THEN 1 ELSE 0 END) = 100)  from t1 where c1 is not null;",
+			inputQuery: "select * from t1;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
 	}
 
 	for _, test := range tests {
