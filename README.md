@@ -30,23 +30,14 @@ This is an early stage project.
 |year|Current year - 1 ~ current year|
 |tinyblob|up to 100 chars random paragraph|
 |tinytext|up to 100 chars random paragraph|
-|blob|up to --max-blob-size chars random paragraph|
+|blob|up to --max-text-size chars random paragraph|
 |text|up to --max-text-size chars random paragraph|
-|mediumblob|up to --max-blob-size chars random paragraph|
+|mediumblob|up to --max-text-size chars random paragraph|
 |mediumtext|up to --max-text-size chars random paragraph|
-|longblob|up to --max-blob-size chars random paragraph|
+|longblob|up to --max-text-size chars random paragraph|
 |longtext|up to --max-text-size chars random paragraph|
-|varbinary|up to 100 chars random paragraph|
 |enum|A random item from the valid items list|
 |set|A random item from the valid items list|
-
-### How strings are generated
-
-- If field size < 10 the program generates a random "first name"
-- If the field size > 10 and < 30 the program generates a random "full name"
-- If the field size > 30 the program generates a "lorem ipsum" paragraph having up to 100 chars.
- 
-The program can detect if a field accepts NULLs and if it does, it will generate NULLs ramdomly (~ 10 % of the values).
 
 ## Usage
 `random-data-load run --database=<database> <table> <number of rows> [options...]`
@@ -60,6 +51,7 @@ The program can detect if a field accepts NULLs and if it does, it will generate
 |--password|Password|
 |--port|Port number|
 |--bulk-size|Number of rows per INSERT statement (Default: 1000)|
+|--workers|how many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time (Default: 3)|
 |--table|Which table to insert to. It will be ignored when a query is included with either --query or --query-file|
 |--query|Providing a query will analyze its schema usage, insert recursively into tables, and identify implicit joins|
 |--query-file|See --query. Accepts a path instead of a direct query|
@@ -180,6 +172,14 @@ https://github.com/Percona-Lab/mysql_random_data_load/releases
 
 ## Version history
 
+
+#### 0.1.11
+- Support for postgres
+- parallelism
+- bool types
+- uniform foreign key patterns
+- skipping unecessary columns and backfilling missing foreign keys through query analysis
+
 #### 0.1.10
 - Fixed argument validations
 - Fixed ~/.my.cnf loading
@@ -229,5 +229,6 @@ https://github.com/Percona-Lab/mysql_random_data_load/releases
 
 #### 0.1.0
 - Initial version
+
 
 
