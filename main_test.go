@@ -270,6 +270,13 @@ func TestRun(t *testing.T) {
 			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
+
+		{
+			name:       "text_max_size",
+			checkQuery: "select (count(*) = 100) from t1 where length(data) < 10;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1", "--max-text-size=9"}},
+		},
 	}
 
 	for _, test := range tests {

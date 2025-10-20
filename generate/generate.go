@@ -22,6 +22,7 @@ type Insert struct {
 	fklinks      ForeignKeyLinks
 	workersCount int
 	insertMutex  sync.Mutex
+	maxTextSize  int64
 }
 
 type ForeignKeyLinks struct {
@@ -65,12 +66,13 @@ var (
 )
 
 // New returns a new Insert instance.
-func New(table *db.Table, fklinks ForeignKeyLinks, workersCount int) *Insert {
+func New(table *db.Table, fklinks ForeignKeyLinks, workersCount int, maxTextSize int64) *Insert {
 	return &Insert{
 		table:        table,
 		writer:       os.Stdout,
 		fklinks:      fklinks,
 		workersCount: workersCount,
+		maxTextSize:  maxTextSize,
 	}
 }
 
@@ -211,7 +213,7 @@ func (in *Insert) genQuery(count int64) *string {
 		wg.Add(1)
 		go func() {
 			for i := int64(0); i < count; i++ {
-				generateFieldsRow(fieldsToGen, values[i][idxFieldsAsDefault:idxFieldsToGen])
+				in.generateFieldsRow(fieldsToGen, values[i][idxFieldsAsDefault:idxFieldsToGen])
 			}
 			wg.Done()
 		}()
@@ -276,7 +278,7 @@ func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
 	return ra, err
 }
 
-func generateFieldsRow(fields []db.Field, insertValues []Getter) {
+func (in *Insert) generateFieldsRow(fields []db.Field, insertValues []Getter) {
 	for colIndex := range insertValues {
 		field := fields[colIndex]
 		var value Getter
@@ -293,14 +295,16 @@ func generateFieldsRow(fields []db.Field, insertValues []Getter) {
 			value = NewRandomInt(field.ColumnName, maxValue, field.IsNullable)
 		case "float", "decimal", "double", "numeric":
 			value = NewRandomDecimal(field.ColumnName, field.NumericPrecision.Int64, field.NumericScale.Int64, field.IsNullable)
-		case "char", "varchar":
-			value = NewRandomString(field.ColumnName, field.CharacterMaximumLength.Int64, field.IsNullable)
 		case "date":
 			value = NewRandomDate(field.ColumnName, field.IsNullable)
 		case "datetime", "timestamp":
 			value = NewRandomDateTime(field.ColumnName, field.IsNullable)
-		case "tinyblob", "tinytext", "blob", "text", "mediumtext", "mediumblob", "longblob", "longtext":
-			value = NewRandomString(field.ColumnName, field.CharacterMaximumLength.Int64, field.IsNullable)
+		case "char", "varchar", "tinyblob", "tinytext", "blob", "text", "mediumtext", "mediumblob", "longblob", "longtext":
+			maxSize := in.maxTextSize
+			if maxSize > field.CharacterMaximumLength.Int64 {
+				maxSize = field.CharacterMaximumLength.Int64
+			}
+			value = NewRandomString(field.ColumnName, maxSize, field.IsNullable)
 		case "time":
 			value = NewRandomTime(field.IsNullable)
 		case "year":

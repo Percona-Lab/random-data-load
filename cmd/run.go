@@ -22,6 +22,7 @@ type RunCmd struct {
 	DryRun       bool   `name:"dry-run" help:"Print queries to the standard output instead of inserting them into the db"`
 	Quiet        bool   `name:"quiet" help:"Do not print progress bar"`
 	WorkersCount int    `name:"workers" help:"how many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time" default:"3"`
+	MaxTextSize  int64  `help:"limit the size of text, varchar and blob fields" default:"65535"`
 
 	Query     string `help:"providing a query will enable to automatically discover the schema, insert recursively into tables, anticipate joins"`
 	QueryFile string `help:"see --query. Accepts a path instead of a direct query"`
@@ -106,7 +107,7 @@ func (cmd *RunCmd) Run() error {
 }
 
 func (cmd *RunCmd) run(table *db.Table) error {
-	ins := generate.New(table, cmd.ForeignKeyLinks, cmd.WorkersCount)
+	ins := generate.New(table, cmd.ForeignKeyLinks, cmd.WorkersCount, cmd.MaxTextSize)
 	wg := &sync.WaitGroup{}
 
 	if !cmd.Quiet && !cmd.DryRun {
