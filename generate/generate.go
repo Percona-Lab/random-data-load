@@ -23,6 +23,7 @@ type Insert struct {
 	workersCount int
 	insertMutex  sync.Mutex
 	maxTextSize  int64
+	uuidVersion  int
 }
 
 type ForeignKeyLinks struct {
@@ -299,6 +300,8 @@ func (in *Insert) generateFieldsRow(fields []db.Field, insertValues []Getter) {
 			value = NewRandomDate(field.ColumnName, field.IsNullable)
 		case "datetime", "timestamp":
 			value = NewRandomDateTime(field.ColumnName, field.IsNullable)
+		case "uuid":
+			value = NewRandomUUID(field.ColumnName, in.uuidVersion, field.IsNullable)
 		case "char", "varchar", "tinyblob", "tinytext", "blob", "text", "mediumtext", "mediumblob", "longblob", "longtext":
 			maxSize := in.maxTextSize
 			if maxSize > field.CharacterMaximumLength.Int64 {

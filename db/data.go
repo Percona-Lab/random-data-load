@@ -259,6 +259,7 @@ func isSupportedType(fieldType string) bool {
 		"varbinary":  true,
 		"enum":       true,
 		"set":        true,
+		"uuid":       true,
 		"bool":       true,
 		"boolean":    true,
 	}

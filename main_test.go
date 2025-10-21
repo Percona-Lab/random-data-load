@@ -277,6 +277,13 @@ func TestRun(t *testing.T) {
 			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1", "--max-text-size=9"}},
 		},
+
+		{
+			name:       "uuid",
+			checkQuery: "select (count(*) = 100) from t1;",
+			engines:    []string{"pg"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
 	}
 
 	for _, test := range tests {
