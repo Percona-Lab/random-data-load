@@ -100,8 +100,11 @@ func (s *UniformSample) Sample() error {
 }
 
 var storedUniformSamples = map[string]*UniformSample{}
+var storedUniformSamplesMutex = sync.Mutex{}
 
 func NewUniformSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter) Sampler {
+	storedUniformSamplesMutex.Lock()
+	defer storedUniformSamplesMutex.Unlock()
 	if s, ok := storedUniformSamples[tablename+constraintName]; ok {
 		s.values = values
 		return s
