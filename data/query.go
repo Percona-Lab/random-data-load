@@ -124,6 +124,7 @@ func traverseJoins(n ast.Node) map[string]string {
 			for _, clause := range tmp.Conditions {
 
 				switch clause := clause.Expression.(type) {
+				//case ast.List
 				case ast.Infix:
 					//tmp := clause.Expression.(ast.Infix)
 					left := joinRemoveAliases(clause.Left)
@@ -147,7 +148,8 @@ func traverseJoins(n ast.Node) map[string]string {
 func tableName(expr ast.Node) string {
 	switch expr := expr.(type) {
 	case ast.Alias: // X.Y AS mytable, (SELECT ...) mytable, ...
-		return tableName(expr.Expression) // Return mytable.
+		aliases[expr.Name.Str] = tableName(expr.Expression)
+		return aliases[expr.Name.Str] // Return mytable.
 	case ast.Leaf: // plain SELECT FROM mytable
 		return expr.Token.Str // return mytable
 	case ast.Infix: // SELECT FROM namespace.mytable.

@@ -30,7 +30,7 @@ var buildInfo = fmt.Sprintf("%s\nVersion %s\nBuild: %s using %s\nCommit: %s", to
 
 var cli struct {
 	Run         cmd.RunCmd   `cmd:"run" help:"Starts the insert process"`
-	Query       cmd.QueryCmd `cmd:"query"`
+	Query       cmd.QueryCmd `cmd:"query" help:"Providing a query will analyze its schema usage, insert recursively into tables, and identify implicit joins"`
 	Version     kong.VersionFlag
 	Profile     bool   `name:"pprof" help:"generate pprof trace at --cpu-prof-path. Also opens port 6060 for pprof go tool"`
 	CPUProfPath string `name:"cpu-prof-path" default:"cpu.prof"`

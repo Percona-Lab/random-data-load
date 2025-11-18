@@ -17,18 +17,9 @@ type Table struct {
 	Name   string
 	Fields []Field
 	//Indexes     map[string]Index
-	Constraints     []*Constraint
-	ColToConstraint map[string]*Constraint
+	Constraints []*Constraint
 }
 
-/*
-type Index struct {
-	Name       string
-	Fields     []string
-	IsUnique   bool
-	IsNullable bool
-}
-*/
 // Constraint holds Foreign Keys information
 type Constraint struct {
 	ConstraintName              string
@@ -41,6 +32,8 @@ type Constraint struct {
 	ReferencedTable             *Table
 	willBeInsertedDuringThisRun bool
 }
+
+type Constraints []*Constraint
 
 // Field holds raw field information as defined in INFORMATION_SCHEMA
 type Field struct {
@@ -57,12 +50,6 @@ type Field struct {
 	skip                   bool
 }
 
-func newTable() *Table {
-	var table Table
-	table.ColToConstraint = map[string]*Constraint{}
-	return &table
-}
-
 // FieldNames returns an string array with the table's field names
 func (t *Table) FieldNames() []string {
 	fields := []string{}
@@ -74,7 +61,7 @@ func (t *Table) FieldNames() []string {
 
 func LoadTable(database, tablename string) (*Table, error) {
 	var err error
-	table := newTable()
+	table := &Table{}
 	engine.SetTableMetadata(table, database, tablename)
 
 	table.Fields, err = GetFields(table.Schema, table.Name)
@@ -94,18 +81,9 @@ func LoadTable(database, tablename string) (*Table, error) {
 			return nil, errors.Wrap(err, "LoadTable")
 		}
 	}
-	table.resolveColToConstraints()
 
 	log.Debug().Strs("fields", table.FieldNames()).Int("lenConstraints", len(table.Constraints)).Str("tablename", table.Name).Str("table schema", table.Schema).Msg("loaded table")
 	return table, nil
-}
-
-func (t *Table) resolveColToConstraints() {
-	for _, constraint := range t.Constraints {
-		for _, colname := range constraint.ColumnsName {
-			t.ColToConstraint[colname] = constraint
-		}
-	}
 }
 
 func (c *Constraint) populateFields(targetTable *Table) error {
@@ -141,7 +119,7 @@ func (c *Constraint) loadReferencedTable() error {
 
 func (t *Table) FieldByName(name string) *Field {
 	for _, field := range t.Fields {
-		if field.ColumnName == name {
+		if strings.ToLower(field.ColumnName) == strings.ToLower(name) {
 			return &field
 		}
 	}
@@ -155,7 +133,7 @@ func (t *Table) FieldsToInsertAsDefault() []Field {
 	fields := []Field{}
 
 	// let's skip this when possible
-	if len(t.FieldsToGenerate())+len(t.FieldsToSample()) != 0 {
+	if len(t.FieldsToGenerate())+len(t.ConstraintsToSample()) != 0 {
 		return fields
 	}
 
@@ -180,36 +158,55 @@ func (t *Table) FieldsToGenerate() []Field {
 		if !field.IsNullable && field.ColumnKey == "PRI" && field.AutoIncrement {
 			continue
 		}
-		if _, ok := t.ColToConstraint[field.ColumnName]; ok {
+		if t.IsFieldInAnyConstraints(field) {
 			continue
 		}
+
 		fields = append(fields, field)
 	}
 	return fields
 }
 
-// FieldsToSample points to the fields of the table we are looking to insert to
-func (t *Table) FieldsToSample() []Field {
-	fields := []Field{}
-
+func (t *Table) IsFieldInAnyConstraints(field Field) bool {
 	for _, constraint := range t.Constraints {
-	ITERATE_FK_COLUMNS:
-		for _, field := range t.Fields {
-			if slices.Contains(constraint.ColumnsName, field.ColumnName) && !field.skip {
-				fields = append(fields, field)
-				continue ITERATE_FK_COLUMNS
+		if slices.ContainsFunc(constraint.ColumnsName, func(s string) bool { return strings.ToLower(s) == strings.ToLower(field.ColumnName) }) {
+			return true
+		}
+	}
+	return false
+}
+
+// currently not checking for any field required for 2 constraints at the same time
+// should not happen since it does not make sense for FKs
+func (t *Table) ConstraintsToSample() Constraints {
+	cs := []*Constraint{}
+	for _, constraint := range t.Constraints {
+		for _, field := range constraint.Fields {
+			// if only 1 field is needed, all fields from this constraint will be needed too
+			if !field.skip {
+				cs = append(cs, constraint)
 			}
 		}
+	}
+	return cs
+}
+
+func (cs Constraints) Fields() []Field {
+	fields := []Field{}
+	for _, c := range cs {
+		fields = append(fields, c.Fields...)
 	}
 	return fields
 }
 
 func (t *Table) FlagConstraintThatArePartsOfThisRun(tables []*Table) {
 	for _, constraint := range t.Constraints {
-		if slices.IndexFunc(tables, func(t2 *Table) bool { return t2.Name == constraint.ReferencedTableName }) != -1 {
+		if slices.ContainsFunc(tables, func(t2 *Table) bool {
+			return strings.ToLower(t2.Name) == strings.ToLower(constraint.ReferencedTableName)
+		}) {
 			constraint.willBeInsertedDuringThisRun = true
 		}
-		log.Debug().Bool("willBeInsertedDuringThisRun", constraint.willBeInsertedDuringThisRun).Str("constraint", constraint.ConstraintName).Str("tablename", t.Name).Str("table schema", t.Schema).Str("func", "FlagConstraintThatArePartsOfThisRun").Msg("output")
+		log.Debug().Bool("willBeInsertedDuringThisRun", constraint.willBeInsertedDuringThisRun).Str("constraint", constraint.ConstraintName).Str("tablename", t.Name).Str("table schema", t.Schema).Str("func", "FlagConstraintThatArePartsOfThisRun").Msg("will constraint be resolved during this run")
 	}
 }
 
@@ -219,13 +216,13 @@ func (t *Table) SkipBasedOnIdentifiers(identifiers map[string]struct{}) {
 		return
 	}
 	for i, field := range t.Fields {
-		if _, ok := identifiers[field.ColumnName]; !ok && field.skippeable() {
-			log.Debug().Str("field", field.ColumnName).Str("tablename", t.Name).Str("table schema", t.Schema).Str("func", "skipBasedOnIdentifiers").Msg("set skip")
+		_, ok := identifiers[field.ColumnName]
+		log.Debug().Str("field", field.ColumnName).Str("tablename", t.Name).Str("table schema", t.Schema).Str("func", "skipBasedOnIdentifiers").Bool("fieldSkippeable", field.skippeable()).Bool("foundInIdentifiers", ok).Bool("will be skipped", !ok && field.skippeable()).Msg("will field be skipped")
+		if !ok && field.skippeable() {
 			field.skip = true
 			t.Fields[i] = field
 			continue
 		}
-		log.Debug().Str("field", field.ColumnName).Str("tablename", t.Name).Str("table schema", t.Schema).Bool("skippeable", field.skippeable()).Str("func", "skipBasedOnIdentifiers").Msg("don't skip")
 	}
 }
 
@@ -291,14 +288,21 @@ func FilterVirtualFKs(tables []*Table, fkeys map[string]string) {
 
 		for _, table := range tables {
 			for _, constraint := range table.Constraints {
+				log.Debug().Str("sourceTable", sourceTable).Str("sourceCol", sourceCol).Str("targetTable", targetTable).Str("targetCol", targetCol).Str("loopCurrentTable", table.Name).Str("loopReferencedTable", constraint.ReferencedTableName).Strs("loopReferencedColumnsName", constraint.ReferencedColumsName).Strs("loopConstraintColumnsName", constraint.ColumnsName).Msg("filtering virtual keys")
 				switch {
-				case sourceTable == table.Name && targetTable == constraint.ReferencedTableName &&
-					slices.Contains(constraint.ColumnsName, sourceCol) && slices.Contains(constraint.ReferencedColumsName, targetCol):
+				case strings.ToLower(sourceTable) == strings.ToLower(table.Name) &&
+					strings.ToLower(targetTable) == strings.ToLower(constraint.ReferencedTableName) &&
+					slices.ContainsFunc(constraint.ColumnsName, func(s string) bool { return strings.ToLower(s) == strings.ToLower(sourceCol) }) &&
+					slices.ContainsFunc(constraint.ReferencedColumsName, func(s string) bool { return strings.ToLower(s) == strings.ToLower(targetCol) }):
+
 					delete(fkeys, source)
 
 					// flipped
-				case targetTable == table.Name && sourceTable == constraint.ReferencedTableName &&
-					slices.Contains(constraint.ColumnsName, targetCol) && slices.Contains(constraint.ReferencedColumsName, sourceCol):
+				case strings.ToLower(targetTable) == strings.ToLower(table.Name) &&
+					strings.ToLower(sourceTable) == strings.ToLower(constraint.ReferencedTableName) &&
+					slices.ContainsFunc(constraint.ColumnsName, func(s string) bool { return strings.ToLower(s) == strings.ToLower(targetCol) }) &&
+					slices.ContainsFunc(constraint.ReferencedColumsName, func(s string) bool { return strings.ToLower(s) == strings.ToLower(sourceCol) }):
+
 					delete(fkeys, source)
 				}
 
@@ -308,39 +312,19 @@ func FilterVirtualFKs(tables []*Table, fkeys map[string]string) {
 }
 
 func AddVirtualFKs(tables []*Table, fkeys map[string]string) error {
+	log.Debug().Interface("fkeys", fkeys).Str("func", "AddVirtualFKs").Msg("adding virtual foreign keys")
 	for source, target := range fkeys {
 		sourceTable, sourceCol, _ := strings.Cut(source, ".")
 		targetTable, targetCol, _ := strings.Cut(target, ".")
 
 		var table *Table
 		// source is parent, target is child. Constraints are on child side
-		tableIdx := slices.IndexFunc(tables, func(t *Table) bool { return t.Name == targetTable })
+		tableIdx := slices.IndexFunc(tables, func(t *Table) bool { return strings.ToLower(t.Name) == strings.ToLower(targetTable) })
 		if tableIdx == -1 {
 			log.Debug().Str("key", source).Str("value", target).Str("func", "AddVirtualFKs").Msg("table not loaded")
 			continue
 		}
 		table = tables[tableIdx]
-		/*
-			sourceTableIdx := slices.IndexFunc(tables, func(t *Table) bool { return t.Name == sourceTable })
-				switch {
-				case tableIdx != -1 && sourceTableIdx != -1:
-					// sets virtual FK on tables with the most fk already
-					// a table without foreign keys will ensure the tool can run with no additional actions
-					if len(tables[sourceTableIdx].Constraints) > len(tables[tableIdx].Constraints) {
-						table = tables[sourceTableIdx]
-					} else {
-						table = tables[tableIdx]
-					}
-				case tableIdx != -1:
-					table = tables[tableIdx]
-				case sourceTableIdx != -1:
-					table = tables[sourceTableIdx]
-				default:
-					log.Warn().Str("key", source).Str("value", target).Str("func", "AddVirtualFKs").Msg("none of those tables are loaded")
-					continue
-
-				}
-		*/
 
 		constraint := Constraint{
 			ConstraintName:        "VirtualFK_" + targetCol,
@@ -352,13 +336,13 @@ func AddVirtualFKs(tables []*Table, fkeys map[string]string) error {
 		constraint.populateFields(table)
 		err := constraint.loadReferencedTable()
 		if err != nil {
+			log.Error().Str("key", source).Str("value", target).Str("func", "AddVirtualFKs").Err(err).Msg("could not add a virtual foreign key, skipping")
 			return errors.Wrap(err, "AddVirtualFKs")
 		}
 		table.Constraints = append(table.Constraints, &constraint)
 		delete(fkeys, source)
 
-		// already called once on the real constraints, but it's safe to call twice to resolve the virtual FKs
-		table.resolveColToConstraints()
+		log.Debug().Str("key", source).Str("value", target).Str("func", "AddVirtualFKs").Msg("virtual foreign key added")
 	}
 
 	return nil
@@ -401,7 +385,9 @@ func (t *Table) AreAllDependenciesContained(tables []*Table) bool {
 		if !constraint.willBeInsertedDuringThisRun {
 			continue
 		}
-		if slices.IndexFunc(tables, func(t2 *Table) bool { return t2.Name == constraint.ReferencedTableName }) == -1 {
+		if !slices.ContainsFunc(tables, func(t2 *Table) bool {
+			return strings.ToLower(t2.Name) == strings.ToLower(constraint.ReferencedTableName)
+		}) {
 			return false
 		}
 	}
@@ -409,7 +395,6 @@ func (t *Table) AreAllDependenciesContained(tables []*Table) bool {
 }
 
 func (f *Field) skippeable() bool {
-	log.Debug().Str("field", f.ColumnName).Bool("nullable", f.IsNullable).Bool("hasDefault", f.HasDefaultValue).Str("func", "skippeable").Msg("debug skippeable")
 	if !f.IsNullable && !f.HasDefaultValue {
 		return false
 	}

@@ -171,7 +171,8 @@ func (in *Insert) genQuery(count int64) *string {
 
 	fieldsAsDefault := in.table.FieldsToInsertAsDefault()
 	fieldsToGen := in.table.FieldsToGenerate()
-	fieldsToSample := in.table.FieldsToSample()
+	constraintsToSample := in.table.ConstraintsToSample()
+	fieldsToSample := constraintsToSample.Fields()
 	var insertQuery strings.Builder
 	_, err := insertQuery.WriteString(fmt.Sprintf(db.InsertTemplate(), //nolint
 		db.Escape(in.table.Schema),
@@ -231,7 +232,7 @@ func (in *Insert) genQuery(count int64) *string {
 			for i := range sampledValues {
 				sampledValues[i] = values[i][idxFieldsToGen:]
 			}
-			err := in.sampleFieldsTable(fieldsToSample, sampledValues)
+			err := in.sampleConstraints(constraintsToSample, sampledValues)
 			if err != nil {
 				log.Error().Err(err).Msg("error when sampling field")
 			}
@@ -324,12 +325,12 @@ func (in *Insert) generateFieldsRow(fields []db.Field, insertValues []Getter) {
 	}
 }
 
-func (in *Insert) sampleFieldsTable(fields []db.Field, values [][]Getter) error {
+func (in *Insert) sampleConstraints(constraints db.Constraints, values [][]Getter) error {
 
 	colIdx := 0
 
 	var err error
-	for _, constraint := range in.table.Constraints {
+	for _, constraint := range constraints {
 
 		// subslice stores only a few columns grouped together with the FK columns
 		subSlice := make([][]Getter, len(values))
