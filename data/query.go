@@ -130,6 +130,10 @@ func traverseJoins(n ast.Node) map[string]string {
 					left := joinRemoveAliases(clause.Left)
 					right := joinRemoveAliases(clause.Right)
 					log.Debug().Str("left", left).Str("right", right).Type("clause", clause).Msg("JoinTraverser")
+					if left == "" || right == "" {
+						log.Debug().Type("left type", clause.Left).Type("right type", clause.Right).Str("left table.col", left).Str("right table.col", right).Msg("left or right side is empty in JoinTraverser, skipping")
+						continue
+					}
 					joins[left] = right
 				default:
 					log.Debug().Type("clause", clause).Msg("non-handled JoinTraverser")
@@ -170,6 +174,9 @@ func joinRemoveAliases(expr ast.Node) string {
 		tablename := left.Token.Str
 		if realTableName, ok := aliases[tablename]; ok {
 			tablename = realTableName
+		}
+		if tablename == "" {
+			return ""
 		}
 		return tablename + "." + right.Token.Str
 	default:
