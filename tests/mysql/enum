@@ -1,0 +1,4 @@
+CREATE TABLE t1 (
+	i integer primary key,
+	possible_values enum('V1','V2','V3') NOT NULL 
+);

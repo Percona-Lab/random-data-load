@@ -284,6 +284,13 @@ func TestRun(t *testing.T) {
 			engines:    []string{"pg"},
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
+
+		{
+			name:       "enum",
+			checkQuery: "select (sum(CASE WHEN possible_values = 'V1' THEN 1 ELSE 0 END) > 0) and (sum(CASE WHEN possible_values = 'V2' THEN 1 ELSE 0 END) > 0) and (sum(CASE WHEN possible_values = 'V3' THEN 1 ELSE 0 END) > 0) from t1;",
+			engines:    []string{"mysql"},
+			cmds:       [][]string{[]string{"--rows=300", "--table=t1"}},
+		},
 	}
 
 	for _, test := range tests {

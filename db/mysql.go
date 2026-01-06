@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
-	"regexp"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -59,11 +58,6 @@ type mySQLIndexField struct {
 }
 
 func (mysql MySQL) GetFields(schema, tablename string) ([]Field, error) {
-	//                           +--------------------------- field type
-	//                           |          +---------------- field size / enum values: decimal(10,2) or enum('a','b')
-	//                           |          |     +---------- extra info (unsigned, etc)
-	//                           |          |     |
-	re := regexp.MustCompile(`^(.*?)(?:\((.*?)\)(.*))?$`)
 	selectValues := []string{
 		"COLUMN_NAME",
 		"IS_NULLABLE = 'YES'",
@@ -110,11 +104,17 @@ func (mysql MySQL) GetFields(schema, tablename string) ([]Field, error) {
 
 		allowedValues := []string{}
 		if f.DataType == "enum" || f.DataType == "set" {
-			m := re.FindStringSubmatch(columnType)
-			if len(m) < 2 {
+			columnType, ok := strings.CutSuffix(columnType, ")")
+			if !ok {
+				log.Error().Str("columnType", columnType).Msg("unexpected columnType, suffix ) not found")
 				continue
 			}
-			vals := strings.Split(m[2], ",")
+			columnType, ok = strings.CutPrefix(columnType, f.DataType+"(")
+			if !ok {
+				log.Error().Str("columnType", columnType).Str("prefix", f.DataType+"(").Msg("unexpected columnType, prefix not found")
+				continue
+			}
+			vals := strings.Split(columnType, ",")
 			for _, val := range vals {
 				val = strings.TrimPrefix(val, "'")
 				val = strings.TrimSuffix(val, "'")
@@ -147,7 +147,7 @@ func (_ MySQL) makeScanRecipients(f *Field, columnType *string, cols []string) [
 		//&f.CharacterOctetLength,
 		&f.NumericPrecision,
 		&f.NumericScale,
-		&columnType,
+		columnType,
 		&f.ColumnKey,
 		&f.AutoIncrement,
 		&f.HasDefaultValue,
