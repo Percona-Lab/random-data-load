@@ -180,11 +180,13 @@ func (t *Table) IsFieldInAnyConstraints(field Field) bool {
 // should not happen since it does not make sense for FKs
 func (t *Table) ConstraintsToSample() Constraints {
 	cs := []*Constraint{}
+CONSTRAINTS:
 	for _, constraint := range t.Constraints {
 		for _, field := range constraint.Fields {
 			// if only 1 field is needed, all fields from this constraint will be needed too
 			if !field.skip {
 				cs = append(cs, constraint)
+				continue CONSTRAINTS
 			}
 		}
 	}
