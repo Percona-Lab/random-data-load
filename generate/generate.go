@@ -27,27 +27,28 @@ type Insert struct {
 }
 
 type ForeignKeyLinks struct {
-	DefaultRelationship string            `name:"default-relationship" enum:"${DBRandomOneToManyFlag},${OneToOneFlag}" default:"${DBRandomOneToManyFlag}"`
-	DBRandom1N          map[string]string ` help:"foreignkey links to 1-N relationships using postgres' tablesamples Bernouilli random or mysql RAND() < 0.1. E.g: --${DBRandomOneToManyFlag}=\"customers=orders;orders=items\""`
+	DefaultRelationship string            `name:"default-relationship" enum:"${BinomialFlag},${OneToOneFlag}" default:"${BinomialFlag}"`
+	Binomial            map[string]string ` help:"foreignkey links to 1-N relationships using repeated postgres' tablesamples Bernouilli random or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). E.g: --${BinomialFlag}=\"customers=orders;orders=items\""`
 	OneToOne            map[string]string `name:"1-1" help:"Override foreignkey links to 1-1 relationships. E.g: --${OneToOneFlag}=\"citizens=ssns\""`
+	CoinFlipPercent     int               `name:"coin-flip-percent" help:"When used for ${BinomialFlag}, it will configure how the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size. No effects when used with $(OneToOneFlag)" default:"10"`
 }
 
 const (
-	OneToOneFlag          = "1-1"
-	DBRandomOneToManyFlag = "db-random-1-n"
+	OneToOneFlag = "1-1"
+	BinomialFlag = "binomial"
 )
 
 var fkLinkToSamplerCreator = map[string]SamplerBuilder{
-	OneToOneFlag:          NewUniformSample,
-	DBRandomOneToManyFlag: NewDBRandomSample,
+	OneToOneFlag: NewUniformSample,
+	BinomialFlag: NewDBRandomSample,
 }
 
 func (r ForeignKeyLinks) relationship(tableName, refTableName string) SamplerBuilder {
 	if r.OneToOne[tableName] == refTableName {
 		return fkLinkToSamplerCreator[OneToOneFlag]
 	}
-	if r.DBRandom1N[tableName] == refTableName {
-		return fkLinkToSamplerCreator[DBRandomOneToManyFlag]
+	if r.Binomial[tableName] == refTableName {
+		return fkLinkToSamplerCreator[BinomialFlag]
 	}
 	return fkLinkToSamplerCreator[r.DefaultRelationship]
 }
@@ -339,7 +340,7 @@ func (in *Insert) sampleConstraints(constraints db.Constraints, values [][]Gette
 		}
 
 		samplerInit := in.fklinks.relationship(in.table.Name, constraint.ReferencedTableName)
-		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlice)
+		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlice, in.fklinks.CoinFlipPercent)
 		err = sampler.Sample()
 		if err != nil {
 			return errors.Wrap(err, "sampleFieldsTable")

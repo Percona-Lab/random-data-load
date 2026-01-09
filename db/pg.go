@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 
 	_ "github.com/lib/pq"
@@ -157,6 +158,6 @@ func (_ Postgres) SetTableMetadata(table *Table, database, tablename string) {
 	table.Name = tablename
 }
 
-func (_ Postgres) DBRandomWhereClause() string {
-	return "TABLESAMPLE BERNOULLI (10)"
+func (_ Postgres) BinomialWhereClause(freqPercent int) string {
+	return "TABLESAMPLE BERNOULLI (" + strconv.Itoa(freqPercent) + ")"
 }

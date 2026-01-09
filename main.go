@@ -43,9 +43,9 @@ func main() {
 		kong.Description("Load random data into a table"),
 		kong.UsageOnError(),
 		kong.Vars{
-			"version":               buildInfo,
-			"OneToOneFlag":          generate.OneToOneFlag,
-			"DBRandomOneToManyFlag": generate.DBRandomOneToManyFlag,
+			"version":      buildInfo,
+			"OneToOneFlag": generate.OneToOneFlag,
+			"BinomialFlag": generate.BinomialFlag,
 		},
 		kong.ConfigureHelp(kong.HelpOptions{
 			Compact: false,

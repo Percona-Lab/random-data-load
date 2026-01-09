@@ -208,6 +208,7 @@ func (_ MySQL) SetTableMetadata(table *Table, database, tablename string) {
 	table.Name = tablename
 }
 
-func (_ MySQL) DBRandomWhereClause() string {
-	return "WHERE rand() < 0.1"
+func (_ MySQL) BinomialWhereClause(freqPercent int) string {
+	freq := fmt.Sprintf("%.2f", float64(freqPercent)/100)
+	return "WHERE rand() < " + freq
 }

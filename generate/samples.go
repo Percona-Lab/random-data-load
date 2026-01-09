@@ -13,12 +13,14 @@ type Sampler interface {
 	Sample() error
 }
 
-type SamplerBuilder func([]db.Field, string, string, string, [][]Getter) Sampler
+type SamplerBuilder func([]db.Field, string, string, string, [][]Getter, int) Sampler
 
 type sampleCommon struct {
 	schema string
 	table  string
 	fields []db.Field
+	values [][]Getter
+	limit  int
 }
 
 func (s *sampleCommon) query(query string, values [][]Getter) error {
@@ -80,8 +82,6 @@ func (s *sampleCommon) getterFromField(f db.Field) ScannerGetter {
 
 type UniformSample struct {
 	sampleCommon
-	values     [][]Getter
-	limit      int
 	lastOffset int // paging by offset is bad, but it will work with compound pk, lack of pk, or complex pk types
 	mutex      sync.Mutex
 }
@@ -102,7 +102,7 @@ func (s *UniformSample) Sample() error {
 var storedUniformSamples = map[string]*UniformSample{}
 var storedUniformSamplesMutex = sync.Mutex{}
 
-func NewUniformSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter) Sampler {
+func NewUniformSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, _ int) Sampler {
 	storedUniformSamplesMutex.Lock()
 	defer storedUniformSamplesMutex.Unlock()
 	if s, ok := storedUniformSamples[tablename+constraintName]; ok {
@@ -121,22 +121,22 @@ func NewUniformSample(fields []db.Field, schema, tablename, constraintName strin
 
 type DBRandomSample struct {
 	sampleCommon
-	values [][]Getter
-	limit  int
+	samplePercent int
 }
 
 func (s *DBRandomSample) Sample() error {
 
 	query := fmt.Sprintf("SELECT %s FROM %s.%s %s LIMIT %d",
-		db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table), db.DBRandomWhereClause(), s.limit)
+		db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table), db.BinomialWhereClause(s.samplePercent), s.limit)
 
 	return s.query(query, s.values)
 }
 
-func NewDBRandomSample(fields []db.Field, schema, name, _ string, values [][]Getter) Sampler {
+func NewDBRandomSample(fields []db.Field, schema, name, _ string, values [][]Getter, samplePercent int) Sampler {
 	s := &DBRandomSample{}
 	s.table = name
 	s.schema = schema
+	s.samplePercent = samplePercent
 	s.limit = len(values)
 	s.values = values
 	s.fields = fields

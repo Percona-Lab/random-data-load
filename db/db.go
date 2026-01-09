@@ -26,7 +26,7 @@ type Engine interface {
 	InsertTemplate() string
 	Escape(string) string
 	SetTableMetadata(*Table, string, string)
-	DBRandomWhereClause() string
+	BinomialWhereClause(int) string
 }
 
 func Connect(config Config) (*sql.DB, error) {
@@ -67,6 +67,6 @@ func Escape(s string) string {
 	return engine.Escape(s)
 }
 
-func DBRandomWhereClause() string {
-	return engine.DBRandomWhereClause()
+func BinomialWhereClause(freqPercent int) string {
+	return engine.BinomialWhereClause(freqPercent)
 }

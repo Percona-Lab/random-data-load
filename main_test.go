@@ -177,10 +177,10 @@ func TestRun(t *testing.T) {
 
 		// not a great test for now, but we want some matches, but not every lines matched
 		{
-			name:       "fk_db_random",
+			name:       "fk_binomial",
 			checkQuery: "select count(*) between 1 and 99 from t1 join t2 on t1.id = t2.t1_id;",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=db-random-1-n"}},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=binomial"}},
 		},
 
 		{
