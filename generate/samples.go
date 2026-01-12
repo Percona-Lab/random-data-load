@@ -51,6 +51,13 @@ func (s *sampleCommon) query(query string, values [][]Getter) error {
 		}
 
 		rowIdx = rowIdx + 1
+
+		if rowIdx == len(values) {
+			err = rows.Close()
+			if err != nil {
+				return errors.Wrap(err, "cannot close rows while sampling")
+			}
+		}
 	}
 
 	if rowIdx == 0 {
@@ -58,6 +65,10 @@ func (s *sampleCommon) query(query string, values [][]Getter) error {
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("cannot get samples: %s", err)
+	}
+	if rowIdx < len(values) {
+		log.Debug().Str("query", query).Str("tablename", s.table).Str("schema", s.schema).Int("rowIdx", rowIdx).Int("len(values)", len(values)).Msg("looping again because we lacked samples")
+		return s.query(query, values[rowIdx:])
 	}
 	return nil
 }
