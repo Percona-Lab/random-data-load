@@ -16,24 +16,25 @@ import (
 type RunCmd struct {
 	DB db.Config `embed:""`
 
-	Table        string `help:"which table to insert to. It will be ignored when a query is included with either --query or --query-file"`
+	Table        string `help:"Table to insert to. When using --query, --table will be used to restrict the tables to insert to."`
 	Rows         int64  `name:"rows" required:"true" help:"Number of rows to insert"`
 	BulkSize     int64  `name:"bulk-size" help:"Number of rows per insert statement" default:"1000"`
 	DryRun       bool   `name:"dry-run" help:"Print queries to the standard output instead of inserting them into the db"`
 	Quiet        bool   `name:"quiet" help:"Do not print progress bar"`
-	WorkersCount int    `name:"workers" help:"how many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time" default:"3"`
-	MaxTextSize  int64  `help:"limit the size of text, varchar and blob fields" default:"65535"`
+	WorkersCount int    `name:"workers" help:"How many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time" default:"3"`
+	MaxTextSize  int64  `help:"Limit the maximum size of long text, varchar and blob fields." default:"65535"`
 
-	Query     string `help:"providing a query will enable to automatically discover the schema, insert recursively into tables, anticipate joins"`
-	QueryFile string `help:"see --query. Accepts a path instead of a direct query"`
+	Query string `help:"Providing a query will enable to automatically discover the schema, insert recursively into tables, enforce implicit joins."`
 
 	generate.ForeignKeyLinks
-	VirtualForeignKeys         map[string]string `name:"virtual-foreign-keys" help:"add additional foreign keys, if they are not explicitely created in the table schema. The format must be parent_table.col1=child_table.col2. It will overwrite every JOINs guessed from queries. Example --virtual-foreign-keys=\"customers.id=purchases.customer_id;purchases.id=items.purchase_id\"" xor:"virtualfk"`
-	SkipAutoVirtualForeignKeys bool              `name:"skip-auto-virtual-foreign-keys" help:"disable foreign key autocomplete. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only." xor:"virtualfk"`
+	VirtualForeignKeys         map[string]string `name:"virtual-foreign-keys" help:"Add foreign keys, if they are not explicitely created in the table schema. The format must be parent_table.col1=child_table.col2. It will overwrite every foreign keys guessed from the --query. Example --virtual-foreign-keys=\"customers.id=purchases.customer_id;purchases.id=items.purchase_id\"" xor:"virtualfk"`
+	SkipAutoVirtualForeignKeys bool              `name:"skip-auto-virtual-foreign-keys" help:"Disable foreign key autocomplete. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only." xor:"virtualfk"`
 }
 
 // Run starts inserting data.
 func (cmd *RunCmd) Run() error {
+
+	// Quick check to confirm database connection
 	_, err := db.Connect(cmd.DB)
 	if err != nil {
 		return err
@@ -43,12 +44,12 @@ func (cmd *RunCmd) Run() error {
 	identifiers := map[string]struct{}{}
 	joins := map[string]string{}
 
-	if !cmd.hasQuery() && cmd.Table == "" {
-		return errors.New("Need either a query (--query | --query-file) or a table (--table)")
+	if cmd.Query == "" && cmd.Table == "" {
+		return errors.New("Need either a --query or a --table")
 	}
 
-	if cmd.hasQuery() {
-		tablesNames, identifiers, joins, err = data.ParseQuery(cmd.Query, cmd.QueryFile, cmd.DB.Engine)
+	if cmd.Query != "" {
+		tablesNames, identifiers, joins, err = data.ParseQuery(cmd.Query, "", cmd.DB.Engine)
 		if err != nil {
 			return err
 		}
@@ -72,7 +73,7 @@ func (cmd *RunCmd) Run() error {
 			return err
 		}
 
-		if cmd.hasQuery() {
+		if cmd.Query != "" {
 			table.SkipBasedOnIdentifiers(identifiers)
 		}
 
@@ -122,10 +123,6 @@ func (cmd *RunCmd) run(table *db.Table) error {
 	err := ins.Run(cmd.Rows, cmd.BulkSize)
 	wg.Wait()
 	return err
-}
-
-func (cmd *RunCmd) hasQuery() bool {
-	return cmd.Query != "" || cmd.QueryFile != ""
 }
 
 func startProgressBar(tablename string, total int64, c chan int64, wg *sync.WaitGroup) {

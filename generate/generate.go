@@ -27,10 +27,10 @@ type Insert struct {
 }
 
 type ForeignKeyLinks struct {
-	DefaultRelationship string            `name:"default-relationship" enum:"${BinomialFlag},${OneToOneFlag}" default:"${BinomialFlag}"`
-	Binomial            map[string]string ` help:"foreignkey links to 1-N relationships using repeated postgres' tablesamples Bernouilli random or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). E.g: --${BinomialFlag}=\"customers=orders;orders=items\""`
-	OneToOne            map[string]string `name:"1-1" help:"Override foreignkey links to 1-1 relationships. E.g: --${OneToOneFlag}=\"citizens=ssns\""`
-	CoinFlipPercent     int               `name:"coin-flip-percent" help:"When used for ${BinomialFlag}, it will configure how the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size. No effects when used with $(OneToOneFlag)" default:"10"`
+	DefaultRelationship string            `name:"default-relationship" help:"Will define the default foreign-key relationship to apply. Possible values: ${BinomialFlag},${OneToOneFlag}. The default relation can be overriden with other parameters --${BinomialFlag} or --${OneToOneFlag}" enum:"${BinomialFlag},${OneToOneFlag}" default:"${BinomialFlag}"`
+	Binomial            map[string]string ` help:"Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). E.g: --${BinomialFlag}=\"customers=orders;orders=items\""`
+	OneToOne            map[string]string `name:"1-1" help:"Defines a 1-1 foreign key links relationships. E.g: --${OneToOneFlag}=\"citizens=ssns\""`
+	CoinFlipPercent     int               `name:"coin-flip-percent" help:"When used with ${BinomialFlag}, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with $(OneToOneFlag)" default:"10"`
 }
 
 const (

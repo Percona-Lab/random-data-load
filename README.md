@@ -1,12 +1,16 @@
 # Random data generator for MySQL and PostgreSQL
 Forked from https://github.com/Percona-Lab/mysql_random_data_load
 
-Many times in my job I need to generate random data for a specific table in order to reproduce an issue.  
-After writing many random generators for every table, I decided to write a random data generator, able to get the table structure and generate random data for it.  
-Plase take into consideration that this is the first version and it doesn't support all field types yet!  
+This tool aims to produce a quick working environment to reproduce a query execution behavior in order to optimize it.
+It is meant for cases where we cannot access real data, only schema and cardinalities. 
 
-**NOTICE**  
-This is an early stage project.  
+Based on the table(s) schema and a query, it will generate random data with respect to fields, foreign keys defined in databases, foreign keys infered from the query pattern, (plan: from existing cardinalities and distributions). 
+
+Notice:
+This is early stage
+
+## Usage
+`random-data-load run --engine=(mysql|pg) --rows=INT-64 (--query=SELECT ...|--table=table_name) [options...]`
 
 ## Supported fields:
 
@@ -39,8 +43,6 @@ This is an early stage project.
 |enum|A random item from the valid items list|
 |set|A random item from the valid items list|
 
-## Usage
-`random-data-load run --database=<database> <table> <number of rows> [options...]`
 
 ## Options
 |Option|Description|
@@ -52,34 +54,57 @@ This is an early stage project.
 |--port|Port number|
 |--bulk-size|Number of rows per INSERT statement (Default: 1000)|
 |--workers|how many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time (Default: 3)|
-|--table|Which table to insert to. It will be ignored when a query is included with either --query or --query-file|
+|--table|Table to insert to. When using --query, --table will be used to restrict the tables to insert to.|
 |--query|Providing a query will analyze its schema usage, insert recursively into tables, and identify implicit joins|
-|--query-file|See --query. Accepts a path instead of a direct query|
-|--debug|Show some debug information|
-|--default-relationship|Sets the default strategy to use for foreign key relationships (Values: 1-1, db-random-1-n; Default: db-random-1-n)
-|--db-random-1-n|Overrides the default relationship strategy. Uses postgres' tablesamples Bernouilli random or mysql RAND() < 0.1. (Example: --db-random-1-n="table=ReferencedTable;orders=customers;items=orders")|
-|--virtual-foreign-keys|Add additional foreign keys, if they are not explicitly created in the table schema. The format must be parent_table.col1=child_table.col2. It will overwrite every JOIN guessed from queries. (Example --virtual-foreign-keys="customers.id=purchases.customer_id;purchases.id=items.purchase_id")|
-|--skip-auto-virtual-foreign-keys|Disables foreign key autocomplete. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitly created in the database objects. This flag will make the tool stick to the constraints defined in the database only.|
-|--pprof|Generate pprof trace at --cpu-prof-path. Also opens port 6060 for pprof go tool|
+|--default-relationship|Will define the default foreign-key relationship to apply. Possible values: binomial,1-1. The default relation can be overriden with other parameters --binomial or --1-1|
+|--binomial|Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). E.g: --binomial="customers=orders;orders=items"|
+|--coin-flip-percent|When used with --binomial, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --1-1 (Default: 10)|
+|--1-1|Defines a 1-1 foreign key links relationships. E.g: --1-1="citizens=ssns"|
+|--virtual-foreign-keys|Add foreign keys, if they are not explicitely created in the table schema. The format must be parent_table.col1=child_table.col2. It will overwrite every foreign keys guessed from the --query. Example --virtual-foreign-keys="customers.id=purchases.customer_id;purchases.id=items.purchase_id"|
+|--skip-auto-virtual-foreign-keys|Disable foreign key autocomplete. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only.|
 |--quiet|Do not print progress bar|
 |--dry-run|Print queries to the standard output instead of inserting them into the db|
+|--debug|Show some debug information|
+|--pprof|Generate pprof trace at --cpu-prof-path. Also opens port 6060 for pprof go tool|
 |--version|Show version and exit|
 
 ## Foreign keys support
-If a field has Foreign Keys constraints, `random-data-load` will get up to `--max-fk-samples` random samples from the referenced tables in order to insert valid values for the field.  
-The number of samples to get follows this rules:  
-**1.** Get the aproximate number of rows in the referenced table using the `rows` field in:  
+If a field has Foreign Keys constraints, `random-data-load` will get samples from the referenced tables in order to insert valid values for the field.  
+
+Compounds foreign keys are supported.
+With very low chances to sample rows, we might sample too little. The tool will loop until it sampled enough rows to fill the next bulk insert.
+
+**1.** 1-1 relationships will sample with LIMIT and OFFSET:  
 ```
-EXPLAIN SELECT COUNT(*) FROM <referenced schema>.<referenced table>
+SELECT <field[, field2]> FROM <referenced schema>.<referenced table> LIMIT <--bulk-size> OFFSET y
 ```
-**1.1** If the number of rows is less than `max-fk-samples`, all rows are retrieved from the referenced table using this query: 
+This isn't the fastest method but it works for every types. The value of the current OFFSET is protected by mutex to prevents frequent duplicates, however there are currently no ORDER BYs to truly secure against re-using samples. 
+
+**2.** binomial relations will sample differently between postgres and mysql
+
+**2.1** For postgres it relies on TABLESAMPLE
 ```
-SELECT <referenced field> FROM <referenced schema>.<referenced table>
+SELECT <field[, field2]> FROM <referenced schema>.<referenced table> TABLESAMPLE BERNOUILLI (<--coin-flip-percent>) LIMIT <--bulk-size>
 ```
-**1.2** If the number of rows is greater than `max-fk-samples`, samples are retrieved from the referenced table using this query:  
+
+**2.2** For mysql, it relies on RAND()
 ```
-SELECT <referenced field> FROM <referenced schema>.<referenced table> WHERE RAND() <= <fk-samples-factor> LIMIT <max-fk-samples>
+SELECT <field[, field2]> FROM <referenced schema>.<referenced table> WHERE rand() < (<--coin-flip-percent>/100) LIMIT <--bulk-size>
 ```
+
+## Guessing implicit foreign keys from queries
+If no foreign keys are explicitely defined in the schema, but the query is using JOINs with a "ON" clause, `random-data-load` will infer the foreign keys and insert valid values so that JOINs work.
+
+An estimation can be made using:
+```
+random-data-load query --query="$(cat huge_select.sql)"
+``` 
+
+It will skip guessing foreign keys for those cases:
+- JOINs relying on subqueries instead of tables
+- JOINs made implicitely without JOIN keywords or "ON" clauses
+- (limitation) JOINs having its ON clause between parenthesis are currently thought to be subqueries and are skipped
+- JOINs conditions using ambiguous columns, without expliciting to what table it belongs. Example `FROM x JOIN y ON apple=pear` instead of `FROM x JOIN y ON x.apple=y.pear`
 
 ### Example
 ```
@@ -161,19 +186,16 @@ tcol28: 6.12
 
 There are binaries available for each version for Linux and Darwin. You can find compiled binaries for each version in the releases tab:
 
-https://github.com/Percona-Lab/mysql_random_data_load/releases
+https://github.com/Percona-Lab/random-data-load/releases
 
 ## To do
-- [ ] recurse loading without queries
-- [ ] pareto random function
-- [ ] gaussian random function
+- [ ] better datetime random generation. It should be flexible over its range
 - [ ] helpers to get schema (generate pgdump/mysqldump commands, get index stats, ...)
 - [ ] import col/index stats and reproduce data distribution
 
 ## Version history
 
-
-#### 0.1.11
+#### 0.2.0
 - Support for postgres
 - parallelism
 - bool types
