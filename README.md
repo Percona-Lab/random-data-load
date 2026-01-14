@@ -71,7 +71,7 @@ This is early stage
 ## Foreign keys support
 If a field has Foreign Keys constraints, `random-data-load` will get samples from the referenced tables in order to insert valid values for the field.  
 
-Compounds foreign keys are supported.
+Composites foreign keys are supported.
 With very low chances to sample rows, we might sample too little. The tool will loop until it sampled enough rows to fill the next bulk insert.
 
 **1.** 1-1 relationships will sample with LIMIT and OFFSET:  
@@ -190,8 +190,10 @@ https://github.com/Percona-Lab/random-data-load/releases
 
 ## To do
 - [ ] better datetime random generation. It should be flexible over its range
+- [ ] incorporating arbitrary values into the bulk inserts, so that query parameters work.
 - [ ] helpers to get schema (generate pgdump/mysqldump commands, get index stats, ...)
 - [ ] import col/index stats and reproduce data distribution
+- [ ] More random algorithms (as of now, no good implementations has been found for pareto that wouldn't provoke huge runtime and/or huge memory consumption, unless implemented fields are restricted to integers)
 
 ## Version history
 
@@ -251,6 +253,7 @@ https://github.com/Percona-Lab/random-data-load/releases
 
 #### 0.1.0
 - Initial version
+
 
 
 
