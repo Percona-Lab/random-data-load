@@ -33,7 +33,7 @@ func (r *RandomBinary) Quote() string {
 }
 
 func NewRandomBinary(name string, maxSize int64, allowNull bool) *RandomBinary {
-	if allowNull && rand.Int63n(100) < nilFrequency {
+	if allowNull && rand.Int63n(100) < NullFrequency {
 		return &RandomBinary{}
 	}
 	var s string

@@ -32,7 +32,9 @@ func (r *RandomUUID) Quote() string {
 }
 
 func NewRandomUUID(name string, uuidVersion int, allowNull bool) *RandomUUID {
-
+	if allowNull && rand.Int63n(100) < NullFrequency {
+		return &RandomUUID{"", true}
+	}
 	var (
 		s   string
 		err error
@@ -54,8 +56,5 @@ func NewRandomUUID(name string, uuidVersion int, allowNull bool) *RandomUUID {
 		panic(err)
 	}
 	s = u.String()
-	if allowNull && rand.Int63n(100) < nilFrequency {
-		return &RandomUUID{"", true}
-	}
 	return &RandomUUID{s, false}
 }

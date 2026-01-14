@@ -53,7 +53,7 @@ func (r *RandomString) Quote() string {
 
 func NewRandomString(name string, maxSize int64, allowNull bool) *RandomString {
 
-	if allowNull && rand.Int63n(100) < nilFrequency {
+	if allowNull && rand.Int63n(100) < NullFrequency {
 		return &RandomString{"", true}
 	}
 	var fn func() string

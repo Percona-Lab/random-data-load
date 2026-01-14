@@ -13,14 +13,14 @@ import (
 
 var aliases = map[string]string{} // only help to identify implicit joins
 
-func ParseQuery(query, queryFile, engine string) (map[string]struct{}, map[string]struct{}, map[string]string, error) {
+func ParseQuery(query, engine string, skipJoins bool) (map[string]struct{}, map[string]struct{}, map[string]string, error) {
 
 	var parsed ast.Node
 	var err error
 
 	switch engine {
 	case "mysql":
-		parsed, err = mysql.Engine().Parse(queryFile, query)
+		parsed, err = mysql.Engine().Parse("", query)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -29,7 +29,7 @@ func ParseQuery(query, queryFile, engine string) (map[string]struct{}, map[strin
 			return parser.Parse(lexer.New(source, input))
 		}
 		engine := rewrite.New("pg", rewrite.Parser(parse))
-		parsed, err = engine.Parse(queryFile, query)
+		parsed, err = engine.Parse("", query)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -39,7 +39,10 @@ func ParseQuery(query, queryFile, engine string) (map[string]struct{}, map[strin
 
 	tables := traverseTables(parsed)
 	identifiers := traverseIdentifiers(parsed)
-	joins := traverseJoins(parsed)
+	joins := map[string]string{}
+	if !skipJoins {
+		joins = traverseJoins(parsed)
+	}
 	return tables, identifiers, joins, nil
 }
 

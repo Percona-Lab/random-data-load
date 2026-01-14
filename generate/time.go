@@ -33,7 +33,7 @@ func (r *RandomTime) Quote() string {
 }
 
 func NewRandomTime(allowNull bool) *RandomTime {
-	if allowNull && rand.Int63n(100) < nilFrequency {
+	if allowNull && rand.Int63n(100) < NullFrequency {
 		return &RandomTime{"", true}
 	}
 	h := rand.Int63n(24)

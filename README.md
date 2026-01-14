@@ -60,8 +60,10 @@ This is early stage
 |--binomial|Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). E.g: --binomial="customers=orders;orders=items"|
 |--coin-flip-percent|When used with --binomial, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --1-1 (Default: 10)|
 |--1-1|Defines a 1-1 foreign key links relationships. E.g: --1-1="citizens=ssns"|
-|--virtual-foreign-keys|Add foreign keys, if they are not explicitely created in the table schema. The format must be parent_table.col1=child_table.col2. It will overwrite every foreign keys guessed from the --query. Example --virtual-foreign-keys="customers.id=purchases.customer_id;purchases.id=items.purchase_id"|
-|--skip-auto-virtual-foreign-keys|Disable foreign key autocomplete. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only.|
+|--add-foreign-keys|Add foreign keys, if they are not explicitely created in the table schema. The format must be parent_table.col1=child_table.col2. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Example --add-foreign-keys="customers.id=purchases.customer_id;purchases.id=items.purchase_id"|
+|--no-fk-guess|Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-foreign-keys.|
+|--no-skip-fields|Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found.|
+|--null-frequency|Define how frequent nullable fields should be NULL|
 |--quiet|Do not print progress bar|
 |--dry-run|Print queries to the standard output instead of inserting them into the db|
 |--debug|Show some debug information|
@@ -94,6 +96,7 @@ SELECT <field[, field2]> FROM <referenced schema>.<referenced table> WHERE rand(
 
 ## Guessing implicit foreign keys from queries
 If no foreign keys are explicitely defined in the schema, but the query is using JOINs with a "ON" clause, `random-data-load` will infer the foreign keys and insert valid values so that JOINs work.
+Can be disabled with --no-fk-guess
 
 An estimation can be made using:
 ```
@@ -106,80 +109,13 @@ It will skip guessing foreign keys for those cases:
 - (limitation) JOINs having its ON clause between parenthesis are currently thought to be subqueries and are skipped
 - JOINs conditions using ambiguous columns, without expliciting to what table it belongs. Example `FROM x JOIN y ON apple=pear` instead of `FROM x JOIN y ON x.apple=y.pear`
 
+## Skipping fields that are not relevant to the query
+When using --query, `random-data-load` will avoid generating or sampling fields that are not necessary for the query to run.
+It can be disabled with --no-skip-fields.
+It will also disable itself if it encounter any * , since the full length of the row would have consequences on the query execution. 
+
 ### Example
 ```
-CREATE DATABASE IF NOT EXISTS test;
-
-CREATE TABLE `test`.`t3` (
-  `id` int(11) NOT NULL AUTO_INCREMENT,
-  `tcol01` tinyint(4) DEFAULT NULL,
-  `tcol02` smallint(6) DEFAULT NULL,
-  `tcol03` mediumint(9) DEFAULT NULL,
-  `tcol04` int(11) DEFAULT NULL,
-  `tcol05` bigint(20) DEFAULT NULL,
-  `tcol06` float DEFAULT NULL,
-  `tcol07` double DEFAULT NULL,
-  `tcol08` decimal(10,2) DEFAULT NULL,
-  `tcol09` date DEFAULT NULL,
-  `tcol10` datetime DEFAULT NULL,
-  `tcol11` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  `tcol12` time DEFAULT NULL,
-  `tcol13` year(4) DEFAULT NULL,
-  `tcol14` varchar(100) DEFAULT NULL,
-  `tcol15` char(2) DEFAULT NULL,
-  `tcol16` blob,
-  `tcol17` text,
-  `tcol18` mediumtext,
-  `tcol19` mediumblob,
-  `tcol20` longblob,
-  `tcol21` longtext,
-  `tcol22` mediumtext,
-  `tcol23` varchar(3) DEFAULT NULL,
-  `tcol24` varbinary(10) DEFAULT NULL,
-  `tcol25` enum('a','b','c') DEFAULT NULL,
-  `tcol26` set('red','green','blue') DEFAULT NULL,
-  `tcol27` float(5,3) DEFAULT NULL,
-  `tcol28` double(4,2) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-) ENGINE=InnoDB;
-```
-To generate 100K random rows, just run:
-```
-mysql_random_data_load test t3 100000 --user=root --password=root
-```
-```
-mysql> select * from t3 limit 1\G
-*************************** 1. row ***************************
-    id: 1
-tcol01: 10
-tcol02: 173
-tcol03: 1700
-tcol04: 13498
-tcol05: 33239373
-tcol06: 44846.4
-tcol07: 5300.23
-tcol08: 11360967.75
-tcol09: 2017-09-04
-tcol10: 2016-11-02 23:11:25
-tcol11: 2017-03-03 08:11:40
-tcol12: 03:19:39
-tcol13: 2017
-tcol14: repellat maxime nostrum provident maiores ut quo voluptas.
-tcol15: Th
-tcol16: Walter
-tcol17: quo repellat accusamus quidem odi
-tcol18: esse laboriosam nobis libero aut dolores e
-tcol19: Carlos Willia
-tcol20: et nostrum iusto ipsa sunt recusa
-tcol21: a accusantium laboriosam voluptas facilis.
-tcol22: laudantium quo unde molestiae consequatur magnam.
-tcol23: Pet
-tcol24: Richard
-tcol25: c
-tcol26: green
-tcol27: 47.430
-tcol28: 6.12
-1 row in set (0.00 sec)
 ```
 
 ## How to download the precompiled binaries
@@ -189,10 +125,16 @@ There are binaries available for each version for Linux and Darwin. You can find
 https://github.com/Percona-Lab/random-data-load/releases
 
 ## To do
+General:
 - [ ] better datetime random generation. It should be flexible over its range
-- [ ] incorporating arbitrary values into the bulk inserts, so that query parameters work.
+- [ ] use more gofakeit generators with regexes to generate "legit" data when possible
 - [ ] helpers to get schema (generate pgdump/mysqldump commands, get index stats, ...)
-- [ ] import col/index stats and reproduce data distribution
+Stepping stones to fully reproduce cardinalities:
+- [ ] incorporating arbitrary values with fixed frequency into the bulk inserts, so that query parameters work.
+- [ ] table-per-table override for --rows, --null-frequency
+- [ ] coin-flip-percent per relationship basis. Current thought: adding it to --binomial this way --binomial="parent=child:70" to set the coinflip to 70 for this link
+- [ ] parse col/index stats (cardinality + most_common_elems + most_common_freqs for postgres, cardinalities for mysql)
+Without clear plan:
 - [ ] More random algorithms (as of now, no good implementations has been found for pareto that wouldn't provoke huge runtime and/or huge memory consumption, unless implemented fields are restricted to integers)
 
 ## Version history

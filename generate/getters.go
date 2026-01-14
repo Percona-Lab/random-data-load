@@ -19,10 +19,11 @@ type ScannerGetter interface {
 }
 
 const (
-	nilFrequency = 10
-	oneYear      = int64(60 * 60 * 24 * 365)
-	NULL         = "NULL"
+	oneYear = int64(60 * 60 * 24 * 365)
+	NULL    = "NULL"
 )
+
+var NullFrequency int64 = 10
 
 type Null struct{}
 

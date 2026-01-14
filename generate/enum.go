@@ -30,7 +30,7 @@ func (r *RandomEnum) Quote() string {
 }
 
 func NewRandomEnum(allowedValues []string, allowNull bool) *RandomEnum {
-	if allowNull && rand.Int63n(100) < nilFrequency {
+	if allowNull && rand.Int63n(100) < NullFrequency {
 		return &RandomEnum{"", true}
 	}
 	i := rand.Int63n(int64(len(allowedValues)))
