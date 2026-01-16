@@ -68,13 +68,14 @@ var (
 )
 
 // New returns a new Insert instance.
-func New(table *db.Table, fklinks ForeignKeyLinks, workersCount int, maxTextSize int64) *Insert {
+func New(table *db.Table, fklinks ForeignKeyLinks, workersCount int, maxTextSize int64, uuidVersion int) *Insert {
 	return &Insert{
 		table:        table,
 		writer:       os.Stdout,
 		fklinks:      fklinks,
 		workersCount: workersCount,
 		maxTextSize:  maxTextSize,
+		uuidVersion:  uuidVersion,
 	}
 }
 

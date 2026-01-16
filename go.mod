@@ -7,7 +7,7 @@ toolchain go1.24.2
 require (
 	github.com/alecthomas/kong v1.8.1
 	github.com/apoorvam/goterminal v0.0.0-20180523175556-614d345c47e5
-	github.com/brianvoe/gofakeit v3.18.0+incompatible
+	github.com/brianvoe/gofakeit/v7 v7.14.0
 	github.com/go-sql-driver/mysql v1.9.0
 	github.com/google/uuid v1.6.0
 	github.com/icrowley/fake v0.0.0-20240710202011-f797eb4a99c0

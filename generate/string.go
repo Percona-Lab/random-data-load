@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"math/rand"
 	"regexp"
+	"strings"
 
-	"github.com/brianvoe/gofakeit"
+	"github.com/brianvoe/gofakeit/v7"
 )
 
 // RandomString getter
@@ -20,9 +21,10 @@ var (
 	lastNameRe  = regexp.MustCompile(`last.*name`)
 	nameRe      = regexp.MustCompile(`name`)
 	phoneRe     = regexp.MustCompile(`phone`)
+	ssn         = regexp.MustCompile(`ssn`)
 	zipRe       = regexp.MustCompile(`zip`)
 	colorRe     = regexp.MustCompile(`color`)
-	ipAddressRe = regexp.MustCompile(`ip.*(?:address)*`)
+	ipAddressRe = regexp.MustCompile(`^ip.*(?:address)*`)
 	addressRe   = regexp.MustCompile(`address`)
 	stateRe     = regexp.MustCompile(`state`)
 	cityRe      = regexp.MustCompile(`city`)
@@ -30,6 +32,13 @@ var (
 	genderRe    = regexp.MustCompile(`gender`)
 	urlRe       = regexp.MustCompile(`url`)
 	domainre    = regexp.MustCompile(`domain`)
+	productName = regexp.MustCompile(`product`)
+	description = regexp.MustCompile(`description`)
+	feature     = regexp.MustCompile(`feature`)
+	material    = regexp.MustCompile(`material`)
+	currency    = regexp.MustCompile(`currency`)
+	company     = regexp.MustCompile(`company`)
+	language    = regexp.MustCompile(`language`)
 )
 
 func (r *RandomString) Value() interface{} {
@@ -53,6 +62,8 @@ func (r *RandomString) Quote() string {
 
 func NewRandomString(name string, maxSize int64, allowNull bool) *RandomString {
 
+	name = strings.ToLower(name)
+
 	if allowNull && rand.Int63n(100) < NullFrequency {
 		return &RandomString{"", true}
 	}
@@ -69,6 +80,8 @@ func NewRandomString(name string, maxSize int64, allowNull bool) *RandomString {
 		fn = gofakeit.Name
 	case phoneRe.MatchString(name):
 		fn = gofakeit.PhoneFormatted
+	case ssn.MatchString(name):
+		fn = gofakeit.SSN
 	case zipRe.MatchString(name):
 		fn = gofakeit.Zip
 	case colorRe.MatchString(name):
@@ -77,10 +90,24 @@ func NewRandomString(name string, maxSize int64, allowNull bool) *RandomString {
 		fn = gofakeit.City
 	case countryRe.MatchString(name):
 		fn = gofakeit.Country
-	case addressRe.MatchString(name):
-		fn = gofakeit.Street
 	case ipAddressRe.MatchString(name):
 		fn = gofakeit.IPv4Address
+	case addressRe.MatchString(name):
+		fn = gofakeit.Street
+	case productName.MatchString(name):
+		fn = gofakeit.ProductName
+	case description.MatchString(name):
+		fn = gofakeit.ProductDescription
+	case feature.MatchString(name):
+		fn = gofakeit.ProductFeature
+	case material.MatchString(name):
+		fn = gofakeit.ProductFeature
+	case currency.MatchString(name):
+		fn = gofakeit.CurrencyShort
+	case company.MatchString(name):
+		fn = gofakeit.Company
+	case language.MatchString(name):
+		fn = gofakeit.Language
 	default:
 		fn = func() string {
 			return gofakeit.Paragraph(10, 10, 10, " ")
@@ -91,5 +118,8 @@ func NewRandomString(name string, maxSize int64, allowNull bool) *RandomString {
 	if len(s) > int(maxSize) {
 		s = s[:int(maxSize)]
 	}
+	// quick and dirty fix to avoid breaking sql
+	// using ? placeholders would be better
+	s = strings.Replace(s, "'", "", -1)
 	return &RandomString{s, false}
 }

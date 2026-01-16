@@ -23,6 +23,7 @@ type RunCmd struct {
 	Quiet        bool   `name:"quiet" help:"Do not print progress bar"`
 	WorkersCount int    `name:"workers" help:"How many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time" default:"3"`
 	MaxTextSize  int64  `help:"Limit the maximum size of long text, varchar and blob fields." default:"65535"`
+	UUIDVersion  int    `name:"uuid-version" help:"UUID v4 or v7 for uuid datatypes" default:"4" enum:"4,7"`
 
 	Query string `help:"Providing a query will enable to automatically discover the schema, insert recursively into tables, enforce implicit joins."`
 
@@ -112,7 +113,7 @@ func (cmd *RunCmd) Run() error {
 }
 
 func (cmd *RunCmd) run(table *db.Table) error {
-	ins := generate.New(table, cmd.ForeignKeyLinks, cmd.WorkersCount, cmd.MaxTextSize)
+	ins := generate.New(table, cmd.ForeignKeyLinks, cmd.WorkersCount, cmd.MaxTextSize, cmd.UUIDVersion)
 	wg := &sync.WaitGroup{}
 
 	if !cmd.Quiet && !cmd.DryRun {
