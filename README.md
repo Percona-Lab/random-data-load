@@ -344,6 +344,38 @@ postgres=# select oi.product_no, count(*) from order_items oi group by 1 order b
 ```
 
 
+## Better field generation based on field names
+
+Very, very minimal for now, based on simple regexes.
+```
+	emailRe     = regexp.MustCompile(`email`)
+	firstNameRe = regexp.MustCompile(`first.*name`)
+	lastNameRe  = regexp.MustCompile(`last.*name`)
+	nameRe      = regexp.MustCompile(`name`)
+	phoneRe     = regexp.MustCompile(`phone`)
+	ssn         = regexp.MustCompile(`ssn`)
+	zipRe       = regexp.MustCompile(`zip`)
+	colorRe     = regexp.MustCompile(`color`)
+	ipAddressRe = regexp.MustCompile(`^ip.*(?:address)*`)
+	addressRe   = regexp.MustCompile(`address`)
+	stateRe     = regexp.MustCompile(`state`)
+	cityRe      = regexp.MustCompile(`city`)
+	countryRe   = regexp.MustCompile(`country`)
+	genderRe    = regexp.MustCompile(`gender`)
+	urlRe       = regexp.MustCompile(`url`)
+	domainre    = regexp.MustCompile(`domain`)
+	productName = regexp.MustCompile(`product`)
+	description = regexp.MustCompile(`description`)
+	feature     = regexp.MustCompile(`feature`)
+	material    = regexp.MustCompile(`material`)
+	currency    = regexp.MustCompile(`currency`)
+	company     = regexp.MustCompile(`company`)
+	language    = regexp.MustCompile(`language`)
+```
+
+They will use an associated gofakeit generator, https://github.com/brianvoe/gofakeit
+
+
 ## How to download the precompiled binaries
 
 There are binaries available for each version for Linux and Darwin. You can find compiled binaries for each version in the releases tab:
