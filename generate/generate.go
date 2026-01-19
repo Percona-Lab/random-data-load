@@ -28,27 +28,27 @@ type Insert struct {
 }
 
 type ForeignKeyLinks struct {
-	DefaultRelationship string            `name:"default-relationship" help:"Will define the default foreign-key relationship to apply. Possible values: ${BinomialFlag},${OneToOneFlag}. The default relation can be overriden with other parameters --${BinomialFlag} or --${OneToOneFlag}" enum:"${BinomialFlag},${OneToOneFlag}" default:"${BinomialFlag}"`
-	Binomial            map[string]string ` help:"Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). E.g: --${BinomialFlag}=\"customers=orders;orders=items\""`
-	OneToOne            map[string]string `name:"1-1" help:"Defines a 1-1 foreign key links relationships. E.g: --${OneToOneFlag}=\"citizens=ssns\""`
-	CoinFlipPercent     float64           `name:"coin-flip-percent" help:"When used with ${BinomialFlag}, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with $(OneToOneFlag)" default:"10"`
+	DefaultRelationship string            `name:"default-relationship" help:"Will define the default foreign-key relationship to apply. Possible values: ${BinomialFlag},${SequentialFlag}. The default relation can be overriden with other parameters --${BinomialFlag} or --${SequentialFlag}" enum:"${BinomialFlag},${SequentialFlag}" default:"${BinomialFlag}"`
+	Binomial            map[string]string ` help:"Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). Format should be \"parent_table=child_table\" E.g: --${BinomialFlag}=\"customers=orders;orders=items\""`
+	Sequential          map[string]string `name:"sequential" help:"Defines a sequential foreign key links relationships, using SELECT ... LIMIT x OFFET y. Format should be \"parent_table=child_table\" E.g: --${SequentialFlag}=\"citizens=ssns\""`
+	CoinFlipPercent     float64           `name:"coin-flip-percent" help:"When used with ${BinomialFlag}, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --${SequentialFlag}. Lower value (e.g 0.001) will also slow down the sampling speed" default:"1"`
 }
 
 const (
-	OneToOneFlag = "1-1"
-	BinomialFlag = "binomial"
+	SequentialFlag = "sequential"
+	BinomialFlag   = "binomial"
 )
 
 var fkLinkToSamplerCreator = map[string]SamplerBuilder{
-	OneToOneFlag: NewUniformSample,
-	BinomialFlag: NewDBRandomSample,
+	SequentialFlag: NewUniformSample,
+	BinomialFlag:   NewDBRandomSample,
 }
 
-func (r ForeignKeyLinks) relationship(tableName, refTableName string) SamplerBuilder {
-	if r.OneToOne[tableName] == refTableName {
-		return fkLinkToSamplerCreator[OneToOneFlag]
+func (r ForeignKeyLinks) relationship(parent, child string) SamplerBuilder {
+	if r.Sequential[parent] == child {
+		return fkLinkToSamplerCreator[SequentialFlag]
 	}
-	if r.Binomial[tableName] == refTableName {
+	if r.Binomial[parent] == child {
 		return fkLinkToSamplerCreator[BinomialFlag]
 	}
 	return fkLinkToSamplerCreator[r.DefaultRelationship]
@@ -346,7 +346,7 @@ func (in *Insert) sampleConstraints(constraints db.Constraints, values [][]Gette
 			subSlice[i] = values[i][colIdx : colIdx+len(constraint.ReferencedFields)]
 		}
 
-		samplerInit := in.fklinks.relationship(in.table.Name, constraint.ReferencedTableName)
+		samplerInit := in.fklinks.relationship(constraint.ReferencedTableName, in.table.Name)
 		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlice, in.fklinks.CoinFlipPercent)
 		err = sampler.Sample()
 		if err != nil {

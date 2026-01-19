@@ -172,7 +172,7 @@ func TestRun(t *testing.T) {
 			name:       "fk_uniform",
 			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
 		},
 
 		// not a great test for now, but we want some matches, but not every lines matched
@@ -180,7 +180,7 @@ func TestRun(t *testing.T) {
 			name:       "fk_binomial",
 			checkQuery: "select count(distinct t1.id) between 1 and 99 from t1 join t2 on t1.id = t2.t1_id;",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=binomial"}},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=binomial", "--coin-flip-percent=60"}},
 		},
 
 		// 5% of 1000 will end up being 50, but we need 100 samples per chunks and t1_id has NOT NULL so it has to loop to get more samples
@@ -195,7 +195,7 @@ func TestRun(t *testing.T) {
 			name:       "fk_multicol",
 			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id and t1.id2 = t2.t1_id2;",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
 		},
 
 		{
@@ -228,7 +228,7 @@ func TestRun(t *testing.T) {
 				checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id and t1.id2 = t2.t1_id2;",
 				inputQuery: "select a1.id, a1.id2 from t1 a1 join t2 a2 on a1.id = a2.t1_id;",
 				engines:    []string{"pg", "mysql"},
-				cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
+				cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
 			},
 		*/
 		{
@@ -237,7 +237,7 @@ func TestRun(t *testing.T) {
 			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id join t3 on t2.id = t3.t2_id join t4 on t3.id = t4.t3_id and t2.id = t4.t2_id;",
 			inputQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id join t3 on t2.id = t3.t2_id join t4 on t3.id = t4.t3_id and t2.id = t4.t2_id;",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=1-1"}},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential"}},
 		},
 		{
 			// same as above, but with the query join order reversed
@@ -245,7 +245,7 @@ func TestRun(t *testing.T) {
 			checkQuery: "select count(*) = 100 from t4 join t2 on t2.id = t4.t2_id join t3 on t3.id = t4.t3_id and t3.t2_id = t2.id join t1 on t1.id = t2.t1_id;",
 			inputQuery: "select count(*) = 100 from t4 join t2 on t2.id = t4.t2_id join t3 on t3.id = t4.t3_id and t3.t2_id = t2.id join t1 on t1.id = t2.t1_id;",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=1-1"}},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential"}},
 		},
 
 		{
@@ -253,7 +253,7 @@ func TestRun(t *testing.T) {
 			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
 			inputQuery: "select * from t1 join t2 on t1.id = t2.t1_id;",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
 		},
 
 		{
@@ -261,14 +261,14 @@ func TestRun(t *testing.T) {
 			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id join t3 on t2.id = t3.t2_id join t4 on t3.id = t4.t3_id;",
 			inputQuery: "select * from t1 join t2 on t1.id = t2.t1_id join t3 on t2.id = t3.t2_id join t4 on t3.id = t4.t3_id;",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=1-1"}, []string{"--rows=100", "--table=t3", "--default-relationship=1-1"}, []string{"--rows=100", "--table=t4", "--default-relationship=1-1"}},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}, []string{"--rows=100", "--table=t3", "--default-relationship=sequential"}, []string{"--rows=100", "--table=t4", "--default-relationship=sequential"}},
 		},
 		{
 			name:       "fk_virtual_cascade_recursive",
 			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id join t3 on t2.id = t3.t2_id join t4 on t3.id = t4.t3_id;",
 			inputQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id join t3 on t2.id = t3.t2_id join t4 on t3.id = t4.t3_id;",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=1-1"}},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential"}},
 		},
 
 		{

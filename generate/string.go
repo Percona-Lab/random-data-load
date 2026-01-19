@@ -101,7 +101,7 @@ func NewRandomString(name string, maxSize int64, allowNull bool) *RandomString {
 	case feature.MatchString(name):
 		fn = gofakeit.ProductFeature
 	case material.MatchString(name):
-		fn = gofakeit.ProductFeature
+		fn = gofakeit.ProductMaterial
 	case currency.MatchString(name):
 		fn = gofakeit.CurrencyShort
 	case company.MatchString(name):

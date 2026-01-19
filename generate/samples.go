@@ -101,7 +101,7 @@ func (s *UniformSample) Sample() error {
 
 	// choosing a chunk + updating lastOffset is the only part that require exclusive access
 	s.mutex.Lock()
-	query := fmt.Sprintf("SELECT %s FROM %s.%s LIMIT %d OFFSET %d",
+	query := fmt.Sprintf("SELECT %s FROM %s.%s ORDER BY 1 LIMIT %d OFFSET %d",
 		db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table), s.limit, s.lastOffset)
 
 	s.lastOffset += s.limit
@@ -137,7 +137,7 @@ type DBRandomSample struct {
 
 func (s *DBRandomSample) Sample() error {
 
-	query := fmt.Sprintf("SELECT %s FROM %s.%s %s LIMIT %d",
+	query := fmt.Sprintf("SELECT %s FROM %s.%s %s ORDER BY 1 LIMIT %d",
 		db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table), db.BinomialWhereClause(s.samplePercent), s.limit)
 
 	return s.query(query, s.values)
