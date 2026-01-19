@@ -110,7 +110,7 @@ func NewRandomString(name string, maxSize int64, allowNull bool) *RandomString {
 		fn = gofakeit.Language
 	default:
 		fn = func() string {
-			return gofakeit.Paragraph(10, 10, 10, " ")
+			return gofakeit.ID()
 		}
 	}
 

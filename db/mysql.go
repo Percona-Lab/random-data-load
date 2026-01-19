@@ -193,7 +193,7 @@ func (_ MySQL) GetConstraints(schema, tableName string) ([]*Constraint, error) {
 }
 
 func (_ MySQL) InsertTemplate() string {
-	return "INSERT IGNORE INTO %s.%s (%s) VALUES \n"
+	return "INSERT INTO %s.%s (%s) VALUES \n"
 }
 
 func (_ MySQL) Escape(s string) string {
@@ -208,7 +208,11 @@ func (_ MySQL) SetTableMetadata(table *Table, database, tablename string) {
 	table.Name = tablename
 }
 
-func (_ MySQL) BinomialWhereClause(freqPercent int) string {
-	freq := fmt.Sprintf("%.2f", float64(freqPercent)/100)
+func (_ MySQL) BinomialWhereClause(freqPercent float64) string {
+	freq := fmt.Sprintf("%.10f", freqPercent/100)
 	return "WHERE rand() < " + freq
+}
+
+func (_ MySQL) ErrShouldRetryTx(err error) bool {
+	return strings.Contains(err.Error(), "Duplicate entry")
 }

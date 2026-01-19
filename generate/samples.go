@@ -13,7 +13,7 @@ type Sampler interface {
 	Sample() error
 }
 
-type SamplerBuilder func([]db.Field, string, string, string, [][]Getter, int) Sampler
+type SamplerBuilder func([]db.Field, string, string, string, [][]Getter, float64) Sampler
 
 type sampleCommon struct {
 	schema string
@@ -113,7 +113,7 @@ func (s *UniformSample) Sample() error {
 var storedUniformSamples = map[string]*UniformSample{}
 var storedUniformSamplesMutex = sync.Mutex{}
 
-func NewUniformSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, _ int) Sampler {
+func NewUniformSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, _ float64) Sampler {
 	storedUniformSamplesMutex.Lock()
 	defer storedUniformSamplesMutex.Unlock()
 	if s, ok := storedUniformSamples[tablename+constraintName]; ok {
@@ -132,7 +132,7 @@ func NewUniformSample(fields []db.Field, schema, tablename, constraintName strin
 
 type DBRandomSample struct {
 	sampleCommon
-	samplePercent int
+	samplePercent float64
 }
 
 func (s *DBRandomSample) Sample() error {
@@ -143,7 +143,7 @@ func (s *DBRandomSample) Sample() error {
 	return s.query(query, s.values)
 }
 
-func NewDBRandomSample(fields []db.Field, schema, name, _ string, values [][]Getter, samplePercent int) Sampler {
+func NewDBRandomSample(fields []db.Field, schema, name, _ string, values [][]Getter, samplePercent float64) Sampler {
 	s := &DBRandomSample{}
 	s.table = name
 	s.schema = schema

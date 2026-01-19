@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sync"
 
 	"github.com/apoorvam/goterminal"
 	"github.com/rs/zerolog/log"
@@ -114,11 +113,9 @@ func (cmd *RunCmd) Run() error {
 
 func (cmd *RunCmd) run(table *db.Table) error {
 	ins := generate.New(table, cmd.ForeignKeyLinks, cmd.WorkersCount, cmd.MaxTextSize, cmd.UUIDVersion)
-	wg := &sync.WaitGroup{}
 
 	if !cmd.Quiet && !cmd.DryRun {
-		wg.Add(1)
-		go startProgressBar(table.Name, cmd.Rows, ins.NotifyChan(), wg)
+		go startProgressBar(table.Name, cmd.Rows, ins.NotifyChan)
 	}
 
 	if cmd.DryRun {
@@ -126,11 +123,11 @@ func (cmd *RunCmd) run(table *db.Table) error {
 	}
 
 	err := ins.Run(cmd.Rows, cmd.BulkSize)
-	wg.Wait()
+	close(ins.NotifyChan)
 	return err
 }
 
-func startProgressBar(tablename string, total int64, c chan int64, wg *sync.WaitGroup) {
+func startProgressBar(tablename string, total int64, c chan int64) {
 	writer := goterminal.New(os.Stdout)
 	var count int64
 	for n := range c {
@@ -140,5 +137,4 @@ func startProgressBar(tablename string, total int64, c chan int64, wg *sync.Wait
 		writer.Print() //nolint
 	}
 	writer.Reset()
-	wg.Done()
 }

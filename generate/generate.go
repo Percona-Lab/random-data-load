@@ -18,19 +18,20 @@ import (
 type Insert struct {
 	table        *db.Table
 	writer       io.Writer
-	notifyChan   chan int64
+	NotifyChan   chan int64
 	fklinks      ForeignKeyLinks
 	workersCount int
 	insertMutex  sync.Mutex
 	maxTextSize  int64
 	uuidVersion  int
+	maxRetries   int
 }
 
 type ForeignKeyLinks struct {
 	DefaultRelationship string            `name:"default-relationship" help:"Will define the default foreign-key relationship to apply. Possible values: ${BinomialFlag},${OneToOneFlag}. The default relation can be overriden with other parameters --${BinomialFlag} or --${OneToOneFlag}" enum:"${BinomialFlag},${OneToOneFlag}" default:"${BinomialFlag}"`
 	Binomial            map[string]string ` help:"Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). E.g: --${BinomialFlag}=\"customers=orders;orders=items\""`
 	OneToOne            map[string]string `name:"1-1" help:"Defines a 1-1 foreign key links relationships. E.g: --${OneToOneFlag}=\"citizens=ssns\""`
-	CoinFlipPercent     int               `name:"coin-flip-percent" help:"When used with ${BinomialFlag}, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with $(OneToOneFlag)" default:"10"`
+	CoinFlipPercent     float64           `name:"coin-flip-percent" help:"When used with ${BinomialFlag}, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with $(OneToOneFlag)" default:"10"`
 }
 
 const (
@@ -69,28 +70,22 @@ var (
 
 // New returns a new Insert instance.
 func New(table *db.Table, fklinks ForeignKeyLinks, workersCount int, maxTextSize int64, uuidVersion int) *Insert {
-	return &Insert{
+	in := &Insert{
 		table:        table,
 		writer:       os.Stdout,
 		fklinks:      fklinks,
 		workersCount: workersCount,
 		maxTextSize:  maxTextSize,
 		uuidVersion:  uuidVersion,
+		maxRetries:   5,
 	}
+	in.NotifyChan = make(chan int64)
+	return in
 }
 
 // SetWriter lets you specify a custom writer. The default is Stdout.
 func (in *Insert) SetWriter(w io.Writer) {
 	in.writer = w
-}
-
-func (in *Insert) NotifyChan() chan int64 {
-	if in.notifyChan != nil {
-		close(in.notifyChan)
-	}
-
-	in.notifyChan = make(chan int64)
-	return in.notifyChan
 }
 
 // Run starts the insert process.
@@ -104,10 +99,6 @@ func (in *Insert) DryRun(count, bulksize int64) error {
 }
 
 func (in *Insert) run(count int64, bulksize int64, dryRun bool) error {
-	if in.notifyChan != nil {
-		defer close(in.notifyChan)
-	}
-
 	// Example: want 11 rows with bulksize 4:
 	// count = int(11 / 4) = 2 -> 2 bulk inserts having 4 rows each = 8 rows
 	// We need to run this insert twice:
@@ -149,16 +140,32 @@ func (in *Insert) run(count int64, bulksize int64, dryRun bool) error {
 
 func (in *Insert) worker(errChan chan<- error, bulksizeJobs <-chan int64, dryRun bool) {
 	for bulksize := range bulksizeJobs {
-		n, err := in.insert(bulksize, dryRun)
-		errChan <- err
-		in.notify(n)
+		tries := 0
+		for {
+			n, err := in.insert(bulksize, dryRun)
+			if err == nil {
+				in.notify(n)
+				errChan <- nil
+				break
+			}
+			if !db.ErrShouldRetryTx(err) {
+				errChan <- errors.Wrap(err, "failed to bulk insert")
+				return
+			}
+			if tries == in.maxRetries {
+				errChan <- errors.Wrapf(err, "failed after %d retries", in.maxRetries)
+				return
+			}
+			tries += 1
+			log.Debug().Msgf("Looping the transaction due to '%v'", err)
+		}
 	}
 }
 
 func (in *Insert) notify(n int64) {
-	if in.notifyChan != nil {
+	if in.NotifyChan != nil {
 		select {
-		case in.notifyChan <- n:
+		case in.NotifyChan <- n:
 		default:
 		}
 	}
@@ -275,7 +282,6 @@ func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
 	defer in.insertMutex.Unlock()
 	res, err := db.DB.Exec(*insertQuery)
 	if err != nil {
-		log.Error().Str("query", *insertQuery).Err(err).Msg("failed to insert")
 		return 0, err
 	}
 	ra, _ := res.RowsAffected()
