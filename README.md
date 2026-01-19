@@ -387,11 +387,13 @@ General:
 - [ ] better datetime random generation. It should be flexible over its range
 - [x] use more gofakeit generators with regexes to generate "legit" data when possible
 - [ ] helpers to get schema (generate pgdump/mysqldump commands, get index stats, ...)
+
 Stepping stones to fully reproduce cardinalities:
 - [ ] incorporating arbitrary values with fixed frequency into the bulk inserts, so that query parameters work.
 - [ ] table-per-table override for --rows, --null-frequency
 - [ ] coin-flip-percent per relationship basis. Current thought: adding it to --binomial this way --binomial="parent=child:70" to set the coinflip to 70 for this link
-- [ ] parse col/index stats (cardinality + most_common_elems + most_common_freqs for postgres, cardinalities for mysql)
+- [ ] parse col/index stats (cardinality + most_common_elems + most_common_freqs for postgres, cardinalities for MySQL)
+
 Without clear plan:
 - [ ] More random algorithms (as of now, no good implementations has been found for pareto that wouldn't provoke huge runtime and/or huge memory consumption, unless implemented fields are restricted to integers)
 
@@ -453,6 +455,7 @@ Without clear plan:
 
 #### 0.1.0
 - Initial version
+
 
 
 
