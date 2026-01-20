@@ -30,6 +30,8 @@ type Engine interface {
 	ErrShouldRetryTx(error) bool
 }
 
+var ErrFieldsNotFound = errors.New("fields not found")
+
 func Connect(config Config) (*sql.DB, error) {
 	err := setEngine(config)
 	if err != nil {

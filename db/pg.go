@@ -73,7 +73,7 @@ func (postgres Postgres) GetFields(schema, tablename string) ([]Field, error) {
 		return []Field{}, err
 	}
 	if !found {
-		return []Field{}, errors.Errorf("fields not found: query: %s, schema: %s, table: %s", query, schema, tablename)
+		return []Field{}, errors.Wrapf(ErrFieldsNotFound, "query: %s", query)
 	}
 	return fields, nil
 }

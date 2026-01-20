@@ -133,7 +133,7 @@ func (mysql MySQL) GetFields(schema, tablename string) ([]Field, error) {
 	}
 
 	if !found {
-		return []Field{}, errors.New("fields not found")
+		return []Field{}, errors.Wrapf(ErrFieldsNotFound, "query: %s", query)
 	}
 	return fields, nil
 }
@@ -157,17 +157,21 @@ func (_ MySQL) makeScanRecipients(f *Field, columnType *string, cols []string) [
 }
 func (_ MySQL) GetConstraints(schema, tableName string) ([]*Constraint, error) {
 	query := `SELECT tc.CONSTRAINT_NAME,
-		kcu.REFERENCED_TABLE_SCHEMA,
-		kcu.REFERENCED_TABLE_NAME,
-		group_concat(kcu.COLUMN_NAME ORDER BY ordinal_position SEPARATOR ';'),
-		group_concat(kcu.REFERENCED_COLUMN_NAME ORDER BY ordinal_position SEPARATOR ';')
+			kcu.REFERENCED_TABLE_SCHEMA,
+			kcu.REFERENCED_TABLE_NAME,
+			group_concat(kcu.COLUMN_NAME ORDER BY ordinal_position SEPARATOR ';'),
+			group_concat(kcu.REFERENCED_COLUMN_NAME ORDER BY ordinal_position SEPARATOR ';')
 		FROM information_schema.TABLE_CONSTRAINTS tc
 		LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu
-		ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+			ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+		JOIN information_schema.tables t
+			ON kcu.referenced_table_schema = t.table_schema
+			AND kcu.referenced_table_name = t.table_name
 		WHERE tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
-		AND tc.TABLE_SCHEMA = ?
-		AND tc.TABLE_NAME = ?
+			AND tc.TABLE_SCHEMA = ?
+			AND tc.TABLE_NAME = ?
 		GROUP BY 1,2,3`
+
 	rows, err := DB.Query(query, schema, tableName)
 	if err != nil {
 		return nil, err

@@ -104,7 +104,7 @@ func (c *Constraint) loadReferencedTable() error {
 	var err error
 	c.ReferencedTable, err = LoadTable(c.ReferencedTableSchema, c.ReferencedTableName)
 	if err != nil {
-		return errors.Wrap(err, "loadReferencedTable")
+		return errors.Wrapf(err, "using schema %s, table %s", c.ReferencedTableSchema, c.ReferencedTableName)
 	}
 	for _, colname := range c.ReferencedColumsName {
 
