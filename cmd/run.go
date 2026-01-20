@@ -1,11 +1,11 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"os"
 
 	"github.com/apoorvam/goterminal"
+	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"github.com/ylacancellera/random-data-load/data"
 	"github.com/ylacancellera/random-data-load/db"
@@ -104,7 +104,7 @@ func (cmd *RunCmd) Run() error {
 	for _, table := range tablesSorted {
 		err = cmd.run(table)
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "failed to insert on %s.%s", table.Schema, table.Name)
 		}
 	}
 

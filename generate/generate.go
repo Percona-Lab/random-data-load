@@ -149,7 +149,7 @@ func (in *Insert) worker(errChan chan<- error, bulksizeJobs <-chan int64, dryRun
 				break
 			}
 			if !db.ErrShouldRetryTx(err) {
-				errChan <- errors.Wrap(err, "failed to bulk insert")
+				errChan <- errors.Wrap(err, "got error during bulk insert")
 				return
 			}
 			if tries == in.maxRetries {

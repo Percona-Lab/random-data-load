@@ -16,17 +16,17 @@ func (r *RandomEnum) Value() interface{} {
 }
 
 func (r *RandomEnum) String() string {
-	if !r.null {
-		return r.value
+	if r.null {
+		return NULL
 	}
-	return "NULL"
+	return r.value
 }
 
 func (r *RandomEnum) Quote() string {
-	if v := r.Value(); v != nil {
-		return fmt.Sprintf("%q", v)
+	if r.null {
+		return NULL
 	}
-	return "NULL"
+	return fmt.Sprintf("'%s'", r.value)
 }
 
 func NewRandomEnum(allowedValues []string, allowNull bool) *RandomEnum {
