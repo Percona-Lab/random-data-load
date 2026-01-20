@@ -44,6 +44,11 @@ func (cmd *RunCmd) Run() error {
 
 	generate.NullFrequency = cmd.NullFrequency
 
+	if (float64(cmd.Rows) * cmd.CoinFlipPercent) < (float64(cmd.BulkSize) / 2) {
+		cmd.CoinFlipPercent = float64(cmd.BulkSize) / float64(cmd.Rows)
+		log.Info().Msgf("Increasing --coin-flip-percent to %.10f due to low --rows to ensure we can at least sample and get half of --bulk-size at a time", cmd.CoinFlipPercent)
+	}
+
 	tablesNames := map[string]struct{}{}
 	identifiers := map[string]struct{}{}
 	joins := map[string]string{}
