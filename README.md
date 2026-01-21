@@ -387,6 +387,7 @@ General:
 - [ ] better datetime random generation. It should be flexible over its range
 - [x] use more gofakeit generators with regexes to generate "legit" data when possible
 - [ ] helpers to get schema (generate pgdump/mysqldump commands, get index stats, ...)
+- [ ] protect against foreign key cycles. Both explicits and implicits (avoid generating implicits that would end up causing loops)
 
 Stepping stones to fully reproduce cardinalities:
 - [ ] incorporating arbitrary values with fixed frequency into the bulk inserts, so that query parameters work.
@@ -455,6 +456,7 @@ Without clear plan:
 
 #### 0.1.0
 - Initial version
+
 
 
 
