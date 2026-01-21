@@ -3,6 +3,9 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/apoorvam/goterminal"
 	"github.com/pkg/errors"
@@ -109,6 +112,10 @@ func (cmd *RunCmd) Run() error {
 	for _, table := range tablesSorted {
 		err = cmd.run(table)
 		if err != nil {
+			// if FK fails on mysql, it could be due to an extra foreign keys even though the referenced table do not exist
+			if cmd.DB.Engine == "mysql" && strings.Contains(err.Error(), "Error 1452") {
+				helperForMySQLFKChecks(tablesSorted, err)
+			}
 			return errors.Wrapf(err, "failed to insert on %s.%s", table.Schema, table.Name)
 		}
 	}
@@ -142,4 +149,18 @@ func startProgressBar(tablename string, total int64, c chan int64) {
 		writer.Print() //nolint
 	}
 	writer.Reset()
+}
+
+func helperForMySQLFKChecks(tablesSorted []*db.Table, err error) {
+
+	// getting the table provoking the issue from the deepest error
+	tableRegex := regexp.MustCompile("REFERENCES `(\\w+)`")
+	submatches := tableRegex.FindStringSubmatch(errors.Cause(err).Error())
+
+	// checking if this table is supposed to be in our list
+	if len(submatches) == 2 && !slices.ContainsFunc(tablesSorted, func(t *db.Table) bool {
+		return strings.ToLower(t.Name) == submatches[1]
+	}) {
+		log.Warn().Msg("A foreign key pointing to a missing tables forced an error. Hint: SET GLOBAL foreign_key_checks=0;")
+	}
 }
