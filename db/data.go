@@ -66,19 +66,19 @@ func LoadTable(database, tablename string) (*Table, error) {
 
 	table.Fields, err = GetFields(table.Schema, table.Name)
 	if err != nil {
-		return nil, errors.Wrap(err, "LoadTable")
+		return nil, errors.Wrapf(err, "LoadTable %s.%s", database, tablename)
 	}
 
 	table.Constraints, err = GetConstraints(table.Schema, table.Name)
 	if err != nil {
-		return nil, errors.Wrap(err, "LoadTable")
+		return nil, errors.Wrapf(err, "LoadTable %s.%s", database, tablename)
 	}
 	//TODO currently not protected against cyclical dependencies
 	for constraintIdx := range table.Constraints {
 		table.Constraints[constraintIdx].populateFields(table)
 		err = table.Constraints[constraintIdx].loadReferencedTable()
 		if err != nil {
-			return nil, errors.Wrap(err, "LoadTable")
+			return nil, errors.Wrapf(err, "LoadTable %s.%s", database, tablename)
 		}
 	}
 
