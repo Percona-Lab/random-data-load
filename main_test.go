@@ -299,6 +299,21 @@ func TestRun(t *testing.T) {
 			engines:    []string{"mysql"},
 			cmds:       [][]string{[]string{"--rows=300", "--table=t1"}},
 		},
+
+		{
+			name:       "mixed_cases",
+			checkQuery: "select count(*) = 100 from `SomeTABLEWithCase` where `COLUMN_1` is not null and `aNOTHER_COLUMN` is not null;",
+			engines:    []string{"mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=SomeTABLEWithCase", "--null-frequency=0"}},
+		},
+
+		{
+			name:       "fk_virtual_mixed_cases",
+			checkQuery: "select count(*) = 100 from `PARENT_TABLE` pT join `CHILD_TABLE` cT on pT.`ParentTableId` = cT.`ParentTableId` where pT.`pARENTTableData` is not null;",
+			inputQuery: "select * from `PARENT_TABLE` pT join `CHILD_TABLE` cT on pT.`ParentTableId` = cT.`ParentTableId` where pT.`pARENTTableData` is not null;",
+			engines:    []string{"mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential", "--null-frequency=0"}},
+		},
 	}
 
 	for _, test := range tests {

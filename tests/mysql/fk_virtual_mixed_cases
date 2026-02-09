@@ -1,0 +1,9 @@
+CREATE TABLE PARENT_TABLE(
+	ParentTableId int auto_increment primary key,
+	pARENTTableData varchar(30)
+);
+CREATE TABLE CHILD_TABLE(
+	ChildTableId int auto_increment primary key,
+	ParentTableId int,
+	ChildTableData varchar(30)
+);

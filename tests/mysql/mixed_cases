@@ -1,0 +1,4 @@
+CREATE TABLE SomeTABLEWithCase (
+	COLUMN_1 integer,
+	aNOTHER_COLUMN text
+);
