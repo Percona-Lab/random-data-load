@@ -22,6 +22,9 @@ var postgresTypeMapping = map[string]string{
 type Postgres struct{}
 
 func (_ Postgres) Connect(dbInfo Config) (*sql.DB, error) {
+	if dbInfo.Port == 0 {
+		dbInfo.Port = 5432
+	}
 	return sql.Open("postgres", fmt.Sprintf("user=%s dbname=%s password=%s sslmode=disable host=%s port=%d ", dbInfo.User, dbInfo.Database, dbInfo.Password, dbInfo.Host, dbInfo.Port))
 }
 
