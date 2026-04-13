@@ -10,9 +10,9 @@ import (
 	"github.com/apoorvam/goterminal"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
-	"github.com/ylacancellera/random-data-load/data"
 	"github.com/ylacancellera/random-data-load/db"
 	"github.com/ylacancellera/random-data-load/generate"
+	"github.com/ylacancellera/random-data-load/query"
 )
 
 type RunCmd struct {
@@ -30,10 +30,10 @@ type RunCmd struct {
 	Query string `help:"Providing a query will enable to automatically discover the schema, insert recursively into tables, enforce implicit joins."`
 
 	generate.ForeignKeyLinks
-	AddForeignKeys map[string]string `name:"add-foreign-keys" help:"Add foreign keys, if they are not explicitely created in the table schema. The format must be parent_table.col1=child_table.col2. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Example --add-foreign-keys=\"customers.id=purchases.customer_id;purchases.id=items.purchase_id\"" `
-	NoFKGuess      bool              `name:"no-fk-guess" help:"Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-foreign-keys." `
-	NoSkipFields   bool              `name:"no-skip-fields" help:"Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found."`
-	NullFrequency  int64             `name:"null-frequency" help:"Define how frequent nullable fields should be NULL." default:"10"`
+	AddForeignKeys query.VirtualJoins `name:"add-fk" help:"Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk=\"parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]\". Example: --add-fk=\"customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id\""`
+	NoFKGuess      bool               `name:"no-fk-guess" help:"Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-fk." `
+	NoSkipFields   bool               `name:"no-skip-fields" help:"Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found."`
+	NullFrequency  int64              `name:"null-frequency" help:"Define how frequent nullable fields should be NULL." default:"10"`
 }
 
 // Run starts inserting data.
@@ -54,14 +54,15 @@ func (cmd *RunCmd) Run() error {
 
 	tablesNames := map[string]struct{}{}
 	identifiers := map[string]struct{}{}
-	joins := map[string]string{}
+	//joins := map[string]string{}
+	joins := []query.VirtualJoin{}
 
 	if cmd.Query == "" && cmd.Table == "" {
 		return errors.New("Need either a --query or a --table")
 	}
 
 	if cmd.Query != "" {
-		tablesNames, identifiers, joins, err = data.ParseQuery(cmd.Query, cmd.DB.Engine, cmd.NoFKGuess)
+		tablesNames, identifiers, joins, err = query.ParseQuery(cmd.Query, cmd.DB.Engine, cmd.NoFKGuess)
 		if err != nil {
 			return err
 		}
@@ -71,10 +72,6 @@ func (cmd *RunCmd) Run() error {
 	// we will still skip some columns and potentially have virtual FKs
 	if cmd.Table != "" {
 		tablesNames = map[string]struct{}{cmd.Table: struct{}{}}
-	}
-
-	for parent, child := range cmd.AddForeignKeys {
-		joins[parent] = child
 	}
 
 	// loading base tables
@@ -91,9 +88,10 @@ func (cmd *RunCmd) Run() error {
 
 		tables = append(tables, table)
 	}
+
 	// now we have the full table list, we can autocomplete foreign keys
+	joins = append(joins, cmd.AddForeignKeys...)
 	if len(joins) > 0 {
-		db.FilterVirtualFKs(tables, joins)
 		db.AddVirtualFKs(tables, joins)
 	}
 	// and identify which constraints should be "garanteed" for this run

@@ -314,6 +314,22 @@ func TestRun(t *testing.T) {
 			engines:    []string{"mysql"},
 			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential", "--null-frequency=0"}},
 		},
+
+		{
+			name:       "fk_sbtest_pointing_to_shared_tables",
+			checkQuery: "SELECT count(*) = 100 FROM t1 LEFT JOIN t2 ON t1.id = t2.id LEFT JOIN t3 ON t1.id = t3.id LEFT JOIN t4 ON t1.id = t4.id",
+			inputQuery: "SELECT t1.c, t2.c, t3.c, t4.c FROM t1 LEFT JOIN t2 ON t1.id = t2.id LEFT JOIN t3 ON t1.id = t3.id LEFT JOIN t4 ON t1.id = t4.id WHERE t1.id = 49877",
+			engines:    []string{"mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential", "--null-frequency=0"}},
+		},
+
+		{
+			name:       "fk_sbtest_pointing_to_shared_tables_no_fk_guess_manual_fks",
+			checkQuery: "SELECT count(*) = 100 FROM t1 LEFT JOIN t2 ON t1.id = t2.id LEFT JOIN t3 ON t1.id = t3.id LEFT JOIN t4 ON t1.id = t4.id",
+			inputQuery: "SELECT t1.c, t2.c, t3.c, t4.c FROM t1 LEFT JOIN t2 ON t1.id = t2.id LEFT JOIN t3 ON t1.id = t3.id LEFT JOIN t4 ON t1.id = t4.id WHERE t1.id = 49877",
+			engines:    []string{"mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential", "--null-frequency=0", "--no-fk-guess", "--add-fk=\"t1.id=t2.id;t1.id=t3.id;t1.id=t4.id\""}},
+		},
 	}
 
 	for _, test := range tests {

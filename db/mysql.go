@@ -189,7 +189,7 @@ func (_ MySQL) GetConstraints(schema, tableName string) ([]*Constraint, error) {
 			return nil, fmt.Errorf("cannot read constraints: %s", err)
 		}
 		c.ColumnsName = strings.Split(columnsNameAgg, ";")
-		c.ReferencedColumsName = strings.Split(refColumnsNameAgg, ";")
+		c.ReferencedColumnsName = strings.Split(refColumnsNameAgg, ";")
 		constraints = append(constraints, &c)
 	}
 

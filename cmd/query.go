@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/ylacancellera/random-data-load/data"
+	"github.com/ylacancellera/random-data-load/query"
 )
 
 type QueryCmd struct {
@@ -14,10 +14,11 @@ type QueryCmd struct {
 func (cmd *QueryCmd) Run() error {
 	var (
 		tables, identifiers map[string]struct{}
-		joins               map[string]string
-		err                 error
+		//joins               map[string]string
+		joins []query.VirtualJoin
+		err   error
 	)
-	tables, identifiers, joins, err = data.ParseQuery(cmd.Query, cmd.Engine, false)
+	tables, identifiers, joins, err = query.ParseQuery(cmd.Query, cmd.Engine, false)
 	if err != nil {
 		return err
 	}

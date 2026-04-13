@@ -6,7 +6,9 @@ import (
 
 	"slices"
 
+	"github.com/brianvoe/gofakeit/v7"
 	"github.com/rs/zerolog/log"
+	"github.com/ylacancellera/random-data-load/query"
 
 	"github.com/pkg/errors"
 )
@@ -26,7 +28,7 @@ type Constraint struct {
 	ReferencedTableSchema       string
 	ReferencedTableName         string
 	ColumnsName                 []string // sorted by ordinal_position
-	ReferencedColumsName        []string
+	ReferencedColumnsName       []string
 	Fields                      []Field
 	ReferencedFields            []Field
 	ReferencedTable             *Table
@@ -106,7 +108,7 @@ func (c *Constraint) loadReferencedTable() error {
 	if err != nil {
 		return errors.Wrapf(err, "using schema %s, table %s", c.ReferencedTableSchema, c.ReferencedTableName)
 	}
-	for _, colname := range c.ReferencedColumsName {
+	for _, colname := range c.ReferencedColumnsName {
 
 		refField := c.ReferencedTable.FieldByName(colname)
 		if refField == nil {
@@ -274,77 +276,85 @@ func EscapedNamesListFromFields(fields []Field) string {
 	return strings.Join(names, ",")
 }
 
-func FilterVirtualFKs(tables []*Table, fkeys map[string]string) {
+func shouldSkipVirtualFK(tables []*Table, vfk query.VirtualJoin) bool {
+
 	// source and target is in the order of the written query, not necessarily in the logical order
 	// source would be the parent table
 	// target would be the child, which could have had an actual FOREIGN KEY object
 	// so the current t *Table should be the target: it points to a dependency
-	for source, target := range fkeys {
-		sourceTable, sourceCol, ok1 := strings.Cut(source, ".")
-		targetTable, targetCol, ok2 := strings.Cut(target, ".")
-		if !ok1 || !ok2 {
-			log.Warn().Str("key", source).Str("value", target).Str("func", "FilterVirtualFKs").Msg("malformed virtual foreign key. Both key and value should look like {table}.{col}")
-			delete(fkeys, source)
-			continue
-		}
 
-		for _, table := range tables {
-			for _, constraint := range table.Constraints {
-				log.Debug().Str("sourceTable", sourceTable).Str("sourceCol", sourceCol).Str("targetTable", targetTable).Str("targetCol", targetCol).Str("loopCurrentTable", table.Name).Str("loopReferencedTable", constraint.ReferencedTableName).Strs("loopReferencedColumnsName", constraint.ReferencedColumsName).Strs("loopConstraintColumnsName", constraint.ColumnsName).Msg("filtering virtual keys")
-				switch {
-				case strings.ToLower(sourceTable) == strings.ToLower(table.Name) &&
-					strings.ToLower(targetTable) == strings.ToLower(constraint.ReferencedTableName) &&
-					slices.ContainsFunc(constraint.ColumnsName, func(s string) bool { return strings.ToLower(s) == strings.ToLower(sourceCol) }) &&
-					slices.ContainsFunc(constraint.ReferencedColumsName, func(s string) bool { return strings.ToLower(s) == strings.ToLower(targetCol) }):
+	for _, table := range tables {
+		for _, constraint := range table.Constraints {
+			log.Debug().
+				Interface("left", vfk.Left).Interface("right", vfk.Right).Str("loopCurrentTable", table.Name).
+				Str("loopReferencedTable", constraint.ReferencedTableName).Strs("loopReferencedColumnsName", constraint.ReferencedColumnsName).Strs("loopConstraintColumnsName", constraint.ColumnsName).
+				Msg("filtering virtual keys")
 
-					delete(fkeys, source)
+			switch {
+			// TODO: we could "supplement" existing FKs with virtual ones, I'm not sure if that's a real use case yet
+			case strings.ToLower(vfk.Left.Table) == strings.ToLower(table.Name) &&
+				strings.ToLower(vfk.Right.Table) == strings.ToLower(constraint.ReferencedTableName) &&
+				isSliceSimilar(constraint.ColumnsName, vfk.Left.Columns) &&
+				isSliceSimilar(constraint.ReferencedColumnsName, vfk.Right.Columns):
+				return true
 
-					// flipped
-				case strings.ToLower(targetTable) == strings.ToLower(table.Name) &&
-					strings.ToLower(sourceTable) == strings.ToLower(constraint.ReferencedTableName) &&
-					slices.ContainsFunc(constraint.ColumnsName, func(s string) bool { return strings.ToLower(s) == strings.ToLower(targetCol) }) &&
-					slices.ContainsFunc(constraint.ReferencedColumsName, func(s string) bool { return strings.ToLower(s) == strings.ToLower(sourceCol) }):
+				// flipped
+			case strings.ToLower(vfk.Right.Table) == strings.ToLower(table.Name) &&
+				strings.ToLower(vfk.Left.Table) == strings.ToLower(constraint.ReferencedTableName) &&
+				isSliceSimilar(constraint.ColumnsName, vfk.Right.Columns) &&
+				isSliceSimilar(constraint.ReferencedColumnsName, vfk.Left.Columns):
 
-					delete(fkeys, source)
-				}
-
+				return true
 			}
+
 		}
 	}
+	return false
 }
 
-func AddVirtualFKs(tables []*Table, fkeys map[string]string) error {
-	log.Debug().Interface("fkeys", fkeys).Str("func", "AddVirtualFKs").Msg("adding virtual foreign keys")
-	for source, target := range fkeys {
-		sourceTable, sourceCol, _ := strings.Cut(source, ".")
-		targetTable, targetCol, _ := strings.Cut(target, ".")
+func isSliceSimilar(s1, s2 []string) bool {
+	for _, e := range s1 {
+		if !slices.ContainsFunc(s2, func(s string) bool { return strings.ToLower(s) == strings.ToLower(e) }) {
+			return false
+		}
+	}
+	return true
+}
 
-		var table *Table
-		// source is parent, target is child. Constraints are on child side
-		tableIdx := slices.IndexFunc(tables, func(t *Table) bool { return strings.ToLower(t.Name) == strings.ToLower(targetTable) })
-		if tableIdx == -1 {
-			log.Debug().Str("key", source).Str("value", target).Str("func", "AddVirtualFKs").Msg("table not loaded")
+func AddVirtualFKs(tables []*Table, fkeys []query.VirtualJoin) error {
+	log.Debug().Interface("fkeys", fkeys).Str("func", "AddVirtualFKs2").Msg("adding virtual foreign keys")
+
+	for _, virtualJoin := range fkeys {
+
+		if shouldSkipVirtualFK(tables, virtualJoin) {
+			log.Debug().Str("left", virtualJoin.Left.Table).Str("right", virtualJoin.Right.Table).Str("func", "AddVirtualFKs").Msg("already handled by schema's constraint, skipping")
 			continue
 		}
-		table = tables[tableIdx]
+
+		// left is parent, right is child. Constraints are on child side
+		tableIdx := slices.IndexFunc(tables, func(t *Table) bool { return strings.ToLower(t.Name) == strings.ToLower(virtualJoin.Right.Table) })
+		if tableIdx == -1 {
+			log.Debug().Str("left", virtualJoin.Left.Table).Str("right", virtualJoin.Right.Table).Str("func", "AddVirtualFKs").Msg("table not loaded")
+			continue
+		}
+		table := tables[tableIdx]
 
 		constraint := Constraint{
-			ConstraintName:        "VirtualFK_" + targetCol,
-			ReferencedTableSchema: table.Schema, // assuming the schema is the same, good enough for now
-			ReferencedTableName:   sourceTable,
-			ColumnsName:           []string{targetCol},
-			ReferencedColumsName:  []string{sourceCol},
+			ConstraintName:        "VirtualFK_" + strings.Join(virtualJoin.Right.Columns, "_") + gofakeit.ID(), // an ID to prevent collisions
+			ReferencedTableSchema: table.Schema,                                                                // assuming the schema is the same, good enough for now
+			ReferencedTableName:   virtualJoin.Left.Table,
+			ColumnsName:           virtualJoin.Right.Columns,
+			ReferencedColumnsName: virtualJoin.Left.Columns,
 		}
 		constraint.populateFields(table)
 		err := constraint.loadReferencedTable()
 		if err != nil {
-			log.Error().Str("key", source).Str("value", target).Str("func", "AddVirtualFKs").Err(err).Msg("could not add a virtual foreign key, skipping")
+			log.Error().Str("left", virtualJoin.Left.Table).Str("right", virtualJoin.Right.Table).Str("func", "AddVirtualFKs").Err(err).Msg("could not add a virtual foreign key, skipping")
 			return errors.Wrap(err, "AddVirtualFKs")
 		}
 		table.Constraints = append(table.Constraints, &constraint)
-		delete(fkeys, source)
 
-		log.Debug().Str("key", source).Str("value", target).Str("func", "AddVirtualFKs").Msg("virtual foreign key added")
+		log.Debug().Str("left", virtualJoin.Left.Table).Str("right", virtualJoin.Right.Table).Str("func", "AddVirtualFKs").Msg("virtual foreign key added")
 	}
 
 	return nil

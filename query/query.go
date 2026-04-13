@@ -1,8 +1,7 @@
-package data
+package query
 
 import (
-	"errors"
-
+	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"gitlab.com/dalibo/transqlate/ast"
 	"gitlab.com/dalibo/transqlate/lexer"
@@ -13,7 +12,7 @@ import (
 
 var aliases = map[string]string{} // only help to identify implicit joins
 
-func ParseQuery(query, engine string, skipJoins bool) (map[string]struct{}, map[string]struct{}, map[string]string, error) {
+func ParseQuery(query, engine string, skipJoins bool) (map[string]struct{}, map[string]struct{}, []VirtualJoin, error) {
 
 	var parsed ast.Node
 	var err error
@@ -39,7 +38,7 @@ func ParseQuery(query, engine string, skipJoins bool) (map[string]struct{}, map[
 
 	tables := traverseTables(parsed)
 	identifiers := traverseIdentifiers(parsed)
-	joins := map[string]string{}
+	joins := []VirtualJoin{}
 	if !skipJoins {
 		joins = traverseJoins(parsed)
 	}
@@ -109,9 +108,9 @@ func traverseTables(n ast.Node) map[string]struct{} {
 	return tables
 }
 
-func traverseJoins(n ast.Node) map[string]string {
+func traverseJoins(n ast.Node) []VirtualJoin {
 
-	joins := map[string]string{}
+	joins := []VirtualJoin{}
 
 	// joinsTraverser will guess joins
 	// the goal is to find joins that are not defined in schemas with foreign keys
@@ -130,14 +129,24 @@ func traverseJoins(n ast.Node) map[string]string {
 				//case ast.List
 				case ast.Infix:
 					//tmp := clause.Expression.(ast.Infix)
-					left := joinRemoveAliases(clause.Left)
-					right := joinRemoveAliases(clause.Right)
-					log.Debug().Str("left", left).Str("right", right).Type("clause", clause).Msg("JoinTraverser")
-					if left == "" || right == "" {
-						log.Debug().Type("left type", clause.Left).Type("right type", clause.Right).Str("left table.col", left).Str("right table.col", right).Msg("left or right side is empty in JoinTraverser, skipping")
+					leftTable, leftCol := joinRemoveAliases(clause.Left)
+					rightTable, rightCol := joinRemoveAliases(clause.Right)
+					log.Debug().Str("left", leftTable).Str("right", rightTable).Type("clause", clause).Msg("JoinTraverser")
+					if leftTable == "" || rightTable == "" {
+						log.Debug().Type("left type", clause.Left).Type("right type", clause.Right).Str("left table", leftTable).Str("right table", rightTable).Str("left col", leftCol).Str("right col", rightCol).Msg("left or right side is empty in JoinTraverser, skipping")
 						continue
 					}
-					joins[left] = right
+
+					joins = append(joins, VirtualJoin{
+						Left: VirtualJoinPart{
+							Table:   leftTable,
+							Columns: []string{leftCol},
+						},
+						Right: VirtualJoinPart{
+							Table:   rightTable,
+							Columns: []string{rightCol},
+						},
+					})
 				default:
 					log.Debug().Type("clause", clause).Msg("non-handled JoinTraverser")
 				}
@@ -169,7 +178,7 @@ func tableName(expr ast.Node) string {
 	return "" // Anonymous table
 }
 
-func joinRemoveAliases(expr ast.Node) string {
+func joinRemoveAliases(expr ast.Node) (string, string) {
 	switch expr := expr.(type) {
 	case ast.Infix:
 		left := expr.Left.(ast.Leaf)
@@ -179,11 +188,18 @@ func joinRemoveAliases(expr ast.Node) string {
 			tablename = realTableName
 		}
 		if tablename == "" {
-			return ""
+			return "", ""
 		}
-		return tablename + "." + right.Token.Str
+		return tablename, right.Token.Str
 	default:
 		log.Debug().Type("node", expr).Msg("joinRemoveAliases unhandled type")
 	}
-	return ""
+	return "", ""
+}
+
+func removeAlias(s string) string {
+	if s2, ok := aliases[s]; ok {
+		return s2
+	}
+	return s
 }

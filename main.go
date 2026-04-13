@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/ylacancellera/random-data-load/cmd"
 	"github.com/ylacancellera/random-data-load/generate"
+	"github.com/ylacancellera/random-data-load/query"
 )
 
 const (
@@ -42,6 +43,7 @@ func main() {
 		kong.Name(toolname),
 		kong.Description("Load random data into a table"),
 		kong.UsageOnError(),
+		kong.ValueMapper(&cli.Run.AddForeignKeys, query.VirtualJoins{}),
 		kong.Vars{
 			"version":        buildInfo,
 			"SequentialFlag": generate.SequentialFlag,
