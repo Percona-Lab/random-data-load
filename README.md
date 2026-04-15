@@ -56,6 +56,7 @@ Valuable types currently not implemented:
 |--user|Username|
 |--password|Password|
 |--port|Port number|
+|--rows-per-table|Number of rows to insert per-table. Will have priority over --rows|
 |--bulk-size|Number of rows per INSERT statement (Default: 1000)|
 |--workers|how many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time (Default: 3)|
 |--table|Table to insert to. When using --query, --table will be used to restrict the tables to insert to.|
