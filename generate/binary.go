@@ -1,9 +1,6 @@
 package generate
 
 import (
-	"fmt"
-	"math/rand"
-
 	"github.com/icrowley/fake"
 )
 
@@ -12,43 +9,22 @@ type RandomBinary struct {
 	value *string
 }
 
-func (r *RandomBinary) Value() interface{} {
+func (r *RandomBinary) String() string {
 	return *r.value
 }
 
-func (r *RandomBinary) String() string {
-	v := r.Value()
-	if v == nil {
-		return NULL
-	}
-	return v.(string)
+func (r *RandomBinary) IsQuotable() bool {
+	return true
 }
 
-func (r *RandomBinary) Quote() string {
-	v := r.Value()
-	if v == nil {
-		return NULL
-	}
-	return fmt.Sprintf("%q", v)
-}
-
-func NewRandomBinary(name string, maxSize int64, allowNull bool) *RandomBinary {
-	if allowNull && rand.Int63n(100) < NullFrequency {
-		return &RandomBinary{}
-	}
+func NewRandomBinary(maxSize int64) *RandomBinary {
 	var s string
 	//maxSize := uint64(r.maxSize)
 	//if maxSize == 0 {
 	//	maxSize = uint64(rand.Int63n(100))
 	//}
 
-	if maxSize <= 10 {
-		s = fake.FirstName()
-	} else if maxSize < 30 {
-		s = fake.FullName()
-	} else {
-		s = fake.Sentence()
-	}
+	s = fake.Sentence()
 	if len(s) > int(maxSize) {
 		s = s[:int(maxSize)]
 	}

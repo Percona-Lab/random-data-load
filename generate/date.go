@@ -1,7 +1,6 @@
 package generate
 
 import (
-	"fmt"
 	"math/rand"
 	"time"
 )
@@ -10,21 +9,15 @@ type RandomDate struct {
 	value time.Time
 }
 
-func (r *RandomDate) Value() interface{} {
-	return r.value
-}
-
 func (r *RandomDate) String() string {
-	d := r.Value().(time.Time)
-	return d.Format("2006-01-02 15:03:04")
+	return r.value.Format("2006-01-02 15:03:04")
 }
 
-func (r *RandomDate) Quote() string {
-	d := r.Value().(time.Time)
-	return fmt.Sprintf("'%s'", d.Format("2006-01-02 15:03:04"))
+func (r *RandomDate) IsQuotable() bool {
+	return true
 }
 
-func NewRandomDate(name string, allowNull bool) *RandomDate {
+func NewRandomDate() *RandomDate {
 	// TODO allownull
 	var randomSeconds time.Duration
 	for i := 0; i < 10 && randomSeconds != 0; i++ {

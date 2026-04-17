@@ -158,7 +158,7 @@ func (_ Postgres) SetTableMetadata(table *Table, database, tablename string) {
 }
 
 func (_ Postgres) BinomialWhereClause(freqPercent float64) string {
-	return "TABLESAMPLE BERNOULLI (" + fmt.Sprintf("%.10f", freqPercent) + ")"
+	return "TABLESAMPLE BERNOULLI (" + fmt.Sprintf("%.10f", freqPercent) + ") WHERE 1=1"
 }
 
 func (_ Postgres) ErrShouldRetryTx(err error) bool {

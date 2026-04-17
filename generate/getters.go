@@ -2,14 +2,13 @@ package generate
 
 import (
 	"database/sql"
+	"fmt"
 	"math/rand"
 	"time"
 )
 
-// All types defined here satisfy the Getter interface
 type Getter interface {
-	Value() interface{}
-	Quote() string
+	IsQuotable() bool
 	String() string
 }
 
@@ -23,18 +22,13 @@ const (
 	NULL    = "NULL"
 )
 
-var NullFrequency int64 = 10
-
 type Null struct{}
 
-func (_ *Null) Value() interface{} {
-	return NULL
-}
-func (_ *Null) Quote() string {
-	return NULL
-}
 func (_ *Null) String() string {
 	return NULL
+}
+func (_ *Null) IsQuotable() bool {
+	return false
 }
 
 type InsertValues []Getter
@@ -44,16 +38,44 @@ func (iv InsertValues) String() string {
 	query := "("
 
 	for _, v := range iv {
-		// wherever it failed, continue optimistically
-		if v == nil {
-			v = &Null{}
-		}
-		query += sep + v.Quote()
+		query += sep + v.String()
 		sep = ", "
 	}
 	query += ")"
 
 	return query
+}
+
+type GetterWrapper struct {
+	Elem Getter
+}
+
+func NewGetterWrapper(column string, nullFreq int) *GetterWrapper {
+	wrapper := GetterWrapper{}
+	if nullFreq > 0 && rand.Int63n(100) < int64(nullFreq) {
+		wrapper.Elem = &Null{}
+	}
+
+	return &wrapper
+}
+
+func (gw *GetterWrapper) Assign(g Getter) {
+	if gw.Elem != nil {
+		return
+	}
+
+	gw.Elem = g
+}
+
+func (gw *GetterWrapper) String() string {
+	if gw.Elem.IsQuotable() {
+		return fmt.Sprintf("'%v'", gw.Elem)
+	}
+	return fmt.Sprintf("%v", gw.Elem)
+}
+
+func (gw *GetterWrapper) IsQuotable() bool {
+	return gw.IsQuotable()
 }
 
 func init() {

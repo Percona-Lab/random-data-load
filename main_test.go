@@ -203,7 +203,7 @@ func TestRun(t *testing.T) {
 			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN c2 IS NULL THEN 1 ELSE 0 END) = 100)  from t1 where c1 is not null;",
 			inputQuery: "select c1 from t1;",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1", "--null-freq=0"}},
 		},
 
 		{
@@ -304,7 +304,7 @@ func TestRun(t *testing.T) {
 			name:       "mixed_cases",
 			checkQuery: "select count(*) = 100 from `SomeTABLEWithCase` where `COLUMN_1` is not null and `aNOTHER_COLUMN` is not null;",
 			engines:    []string{"mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--table=SomeTABLEWithCase", "--null-frequency=0"}},
+			cmds:       [][]string{[]string{"--rows=100", "--table=SomeTABLEWithCase", "--null-freq=0"}},
 		},
 
 		{
@@ -312,7 +312,7 @@ func TestRun(t *testing.T) {
 			checkQuery: "select count(*) = 100 from `PARENT_TABLE` pT join `CHILD_TABLE` cT on pT.`ParentTableId` = cT.`ParentTableId` where pT.`pARENTTableData` is not null;",
 			inputQuery: "select * from `PARENT_TABLE` pT join `CHILD_TABLE` cT on pT.`ParentTableId` = cT.`ParentTableId` where pT.`pARENTTableData` is not null;",
 			engines:    []string{"mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential", "--null-frequency=0"}},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential", "--null-freq=0"}},
 		},
 
 		{
@@ -320,7 +320,7 @@ func TestRun(t *testing.T) {
 			checkQuery: "SELECT count(*) = 100 FROM t1 LEFT JOIN t2 ON t1.id = t2.id LEFT JOIN t3 ON t1.id = t3.id LEFT JOIN t4 ON t1.id = t4.id",
 			inputQuery: "SELECT t1.c, t2.c, t3.c, t4.c FROM t1 LEFT JOIN t2 ON t1.id = t2.id LEFT JOIN t3 ON t1.id = t3.id LEFT JOIN t4 ON t1.id = t4.id WHERE t1.id = 49877",
 			engines:    []string{"mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential", "--null-frequency=0"}},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential", "--null-freq=0"}},
 		},
 
 		{
@@ -328,7 +328,14 @@ func TestRun(t *testing.T) {
 			checkQuery: "SELECT count(*) = 100 FROM t1 LEFT JOIN t2 ON t1.id = t2.id LEFT JOIN t3 ON t1.id = t3.id LEFT JOIN t4 ON t1.id = t4.id",
 			inputQuery: "SELECT t1.c, t2.c, t3.c, t4.c FROM t1 LEFT JOIN t2 ON t1.id = t2.id LEFT JOIN t3 ON t1.id = t3.id LEFT JOIN t4 ON t1.id = t4.id WHERE t1.id = 49877",
 			engines:    []string{"mysql"},
-			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential", "--null-frequency=0", "--no-fk-guess", "--add-fk=\"t1.id=t2.id;t1.id=t3.id;t1.id=t4.id\""}},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential", "--null-freq=0", "--no-fk-guess", "--add-fk=\"t1.id=t2.id;t1.id=t3.id;t1.id=t4.id\""}},
+		},
+
+		{
+			name:       "null_map",
+			checkQuery: "select (count(*) = 100000) AND (sum(CASE WHEN c1 IS NULL THEN 1 ELSE 0 END) between 19500 and 20500) AND (sum(CASE WHEN c2 IS NULL THEN 1 ELSE 0 END) between 39500 and 40500) AND (sum(CASE WHEN c3 IS NULL THEN 1 ELSE 0 END) between 89500 and 90500) from t1;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100000", "--table=t1", "--null-freq=20", "--null-freq-map=t1.c2=40;t1.c3=90"}},
 		},
 	}
 

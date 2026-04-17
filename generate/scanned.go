@@ -11,16 +11,12 @@ type ScannedInt struct {
 	value int64
 }
 
-func (s *ScannedInt) Value() interface{} {
-	return s.value
-}
-
 func (s *ScannedInt) String() string {
-	return fmt.Sprintf("%d", s.Value())
+	return fmt.Sprintf("%d", s.value)
 }
 
-func (s *ScannedInt) Quote() string {
-	return s.String()
+func (s *ScannedInt) IsQuotable() bool {
+	return false
 }
 
 func (s *ScannedInt) Scan(src any) (err error) {
@@ -41,16 +37,12 @@ type ScannedString struct {
 	value string
 }
 
-func (s *ScannedString) Value() interface{} {
-	return s.value
-}
-
 func (s *ScannedString) String() string {
 	return s.value
 }
 
-func (s *ScannedString) Quote() string {
-	return "'" + s.String() + "'"
+func (s *ScannedString) IsQuotable() bool {
+	return true
 }
 
 func (s *ScannedString) Scan(src any) (err error) {
@@ -73,16 +65,13 @@ type ScannedBinary struct {
 	value []rune
 }
 
-func (s *ScannedBinary) Value() interface{} {
-	return s.value
-}
-
 func (s *ScannedBinary) String() string {
-	return string(s.value)
+	// TODO: move db.escape upper for every fields ?
+	return db.Escape(string(s.value))
 }
 
-func (s *ScannedBinary) Quote() string {
-	return db.Escape(s.String())
+func (s *ScannedBinary) IsQuotable() bool {
+	return true
 }
 
 func (s *ScannedBinary) Scan(src any) (err error) {
@@ -103,16 +92,12 @@ type ScannedDecimal struct {
 	value float64
 }
 
-func (s *ScannedDecimal) Value() interface{} {
-	return s.value
-}
-
 func (s *ScannedDecimal) String() string {
-	return fmt.Sprintf("%f", s.Value())
+	return fmt.Sprintf("%f", s.value)
 }
 
-func (s *ScannedDecimal) Quote() string {
-	return s.String()
+func (s *ScannedDecimal) IsQuotable() bool {
+	return false
 }
 
 func (s *ScannedDecimal) Scan(src any) (err error) {
@@ -133,16 +118,12 @@ type ScannedTime struct {
 	value time.Time
 }
 
-func (s *ScannedTime) Value() interface{} {
-	return s.value
-}
-
 func (s *ScannedTime) String() string {
-	return fmt.Sprintf("%v", s.Value())
+	return fmt.Sprintf("%v", s.value)
 }
 
-func (s *ScannedTime) Quote() string {
-	return s.String()
+func (s *ScannedTime) IsQuotable() bool {
+	return true
 }
 
 func (s *ScannedTime) Scan(src any) (err error) {

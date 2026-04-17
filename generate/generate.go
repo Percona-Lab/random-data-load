@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/ylacancellera/random-data-load/db"
+	"github.com/ylacancellera/random-data-load/frequency"
 )
 
 type Insert struct {
@@ -25,6 +26,7 @@ type Insert struct {
 	maxTextSize  int64
 	uuidVersion  int
 	maxRetries   int
+	frequencies  frequency.ColumnFrequency
 }
 
 type ForeignKeyLinks struct {
@@ -69,7 +71,7 @@ var (
 )
 
 // New returns a new Insert instance.
-func New(table *db.Table, fklinks ForeignKeyLinks, workersCount int, maxTextSize int64, uuidVersion int) *Insert {
+func New(table *db.Table, fklinks ForeignKeyLinks, workersCount int, maxTextSize int64, uuidVersion int, freqs frequency.ColumnFrequency) *Insert {
 	in := &Insert{
 		table:        table,
 		writer:       os.Stdout,
@@ -78,6 +80,7 @@ func New(table *db.Table, fklinks ForeignKeyLinks, workersCount int, maxTextSize
 		maxTextSize:  maxTextSize,
 		uuidVersion:  uuidVersion,
 		maxRetries:   5,
+		frequencies:  freqs,
 	}
 	in.NotifyChan = make(chan int64)
 	return in
@@ -291,45 +294,49 @@ func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
 func (in *Insert) generateFieldsRow(fields []db.Field, insertValues []Getter) {
 	for colIndex := range insertValues {
 		field := fields[colIndex]
-		var value Getter
+		gw := NewGetterWrapper(field.ColumnName, in.frequencies.NullForColumn(field.ColumnName, field.IsNullable))
+		if gw.Elem != nil {
+			goto SKIP_NULL
+		}
 		switch field.DataType {
 		case "bool", "boolean":
-			value = NewRandomBool(field.ColumnName, field.IsNullable)
+			gw.Assign(NewRandomBool())
 		case "tinyint", "bit":
-			value = NewRandomIntRange(field.ColumnName, 0, 1, field.IsNullable)
+			gw.Assign(NewRandomIntRange(0, 1))
 		case "smallint", "mediumint", "int", "integer", "bigint":
 			maxValue := maxValues["bigint"]
 			if m, ok := maxValues[field.DataType]; ok {
 				maxValue = m
 			}
-			value = NewRandomInt(field.ColumnName, maxValue, field.IsNullable)
+			gw.Assign(NewRandomInt(maxValue))
 		case "float", "decimal", "double", "numeric":
-			value = NewRandomDecimal(field.ColumnName, field.NumericPrecision.Int64, field.NumericScale.Int64, field.IsNullable)
+			gw.Assign(NewRandomDecimal(field.NumericPrecision.Int64, field.NumericScale.Int64))
 		case "date":
-			value = NewRandomDate(field.ColumnName, field.IsNullable)
+			gw.Assign(NewRandomDate())
 		case "datetime", "timestamp":
-			value = NewRandomDateTime(field.ColumnName, field.IsNullable)
+			gw.Assign(NewRandomDateTime())
+		case "time":
+			gw.Assign(NewRandomTime())
 		case "uuid":
-			value = NewRandomUUID(field.ColumnName, in.uuidVersion, field.IsNullable)
+			gw.Assign(NewRandomUUID(in.uuidVersion))
 		case "char", "varchar", "tinyblob", "tinytext", "blob", "text", "mediumtext", "mediumblob", "longblob", "longtext":
 			maxSize := in.maxTextSize
 			if maxSize > field.CharacterMaximumLength.Int64 {
 				maxSize = field.CharacterMaximumLength.Int64
 			}
-			value = NewRandomString(field.ColumnName, maxSize, field.IsNullable)
-		case "time":
-			value = NewRandomTime(field.IsNullable)
+			gw.Assign(NewRandomString(field.ColumnName, maxSize))
 		case "year":
-			value = NewRandomIntRange(field.ColumnName, int64(time.Now().Year()-1),
-				int64(time.Now().Year()), field.IsNullable)
+			// TODO: meh.
+			gw.Assign(NewRandomIntRange(int64(time.Now().Year()-5), int64(time.Now().Year())))
 		case "enum", "set":
-			value = NewRandomEnum(field.SetEnumVals, field.IsNullable)
+			gw.Assign(NewRandomEnum(field.SetEnumVals))
 		case "binary", "varbinary":
-			value = NewRandomBinary(field.ColumnName, field.CharacterMaximumLength.Int64, field.IsNullable)
+			gw.Assign(NewRandomBinary(field.CharacterMaximumLength.Int64))
 		default:
 			log.Error().Str("type", field.DataType).Str("field", field.ColumnName).Msg("unsupported datatypes when generating fields")
 		}
-		insertValues[colIndex] = value
+	SKIP_NULL:
+		insertValues[colIndex] = gw
 	}
 }
 

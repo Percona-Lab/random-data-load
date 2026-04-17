@@ -11,6 +11,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"github.com/ylacancellera/random-data-load/db"
+	"github.com/ylacancellera/random-data-load/frequency"
 	"github.com/ylacancellera/random-data-load/generate"
 	"github.com/ylacancellera/random-data-load/query"
 )
@@ -30,10 +31,11 @@ type RunCmd struct {
 	Query        string           `help:"Providing a query will enable to automatically discover the schema, insert recursively into tables, enforce implicit joins."`
 
 	generate.ForeignKeyLinks
-	AddForeignKeys query.VirtualJoins `name:"add-fk" help:"Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk=\"parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]\". Example: --add-fk=\"customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id\""`
-	NoFKGuess      bool               `name:"no-fk-guess" help:"Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-fk." `
-	NoSkipFields   bool               `name:"no-skip-fields" help:"Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found."`
-	NullFrequency  int64              `name:"null-frequency" help:"Define how frequent nullable fields should be NULL." default:"10"`
+	AddForeignKeys query.VirtualJoins               `name:"add-fk" help:"Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk=\"parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]\". Example: --add-fk=\"customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id\""`
+	NoFKGuess      bool                             `name:"no-fk-guess" help:"Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-fk." `
+	NoSkipFields   bool                             `name:"no-skip-fields" help:"Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found."`
+	NullFreq       int                              `name:"null-freq" help:"Define how frequent nullable fields should be NULL by default." default:"10"`
+	NullFreqMap    frequency.FrequencyNullParameter `name:"null-freq-map" help:"Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=73;t1.c2=4\" to set 73%% or 4%% of NULL for respective columns"`
 }
 
 // Run starts inserting data.
@@ -45,7 +47,8 @@ func (cmd *RunCmd) Run() error {
 		return err
 	}
 
-	generate.NullFrequency = cmd.NullFrequency
+	frequency.DefaultNullFrequency = cmd.NullFreq
+	log.Debug().Interface("null-freq-map", cmd.NullFreqMap).Msg("null-freq-map parsed")
 
 	if (float64(cmd.Rows) * cmd.CoinFlipPercent) < (float64(cmd.BulkSize) / 2) {
 		cmd.CoinFlipPercent = float64(cmd.BulkSize) / float64(cmd.Rows) / 2
@@ -123,8 +126,8 @@ func (cmd *RunCmd) Run() error {
 
 func (cmd *RunCmd) run(table *db.Table) error {
 	rows := valueForTable(cmd.Rows, cmd.RowsPerTable, table.Name)
-
-	ins := generate.New(table, cmd.ForeignKeyLinks, cmd.WorkersCount, cmd.MaxTextSize, cmd.UUIDVersion)
+	colNullFreqs := cmd.NullFreqMap[table.Name]
+	ins := generate.New(table, cmd.ForeignKeyLinks, cmd.WorkersCount, cmd.MaxTextSize, cmd.UUIDVersion, colNullFreqs)
 
 	if !cmd.Quiet && !cmd.DryRun {
 		go startProgressBar(table.Name, rows, ins.NotifyChan)

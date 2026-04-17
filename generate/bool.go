@@ -9,18 +9,14 @@ type RandomBool struct {
 	value int64
 }
 
-func (r *RandomBool) Value() interface{} {
-	return r.value
-}
-
 func (r *RandomBool) String() string {
-	return fmt.Sprintf("%d", r.Value())
+	return fmt.Sprintf("%d", r.value)
 }
 
-func (r *RandomBool) Quote() string {
-	return fmt.Sprintf("'%d'", r.Value())
+func (r *RandomBool) IsQuotable() bool {
+	return true // for pg, you can input bool as int when it's quoted
 }
 
-func NewRandomBool(name string, allowNull bool) *RandomBool {
+func NewRandomBool() *RandomBool {
 	return &RandomBool{rand.Int63n(2)}
 }

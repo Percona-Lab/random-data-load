@@ -37,7 +37,6 @@ type Constraint struct {
 
 type Constraints []*Constraint
 
-// Field holds raw field information as defined in INFORMATION_SCHEMA
 type Field struct {
 	ColumnName             string
 	IsNullable             bool
@@ -274,6 +273,14 @@ func EscapedNamesListFromFields(fields []Field) string {
 		names = append(names, Escape(field.ColumnName))
 	}
 	return strings.Join(names, ",")
+}
+
+func EscapedFieldsIsNotNull(fields []Field) string {
+	names := make([]string, 0, len(fields))
+	for _, field := range fields {
+		names = append(names, Escape(field.ColumnName)+" IS NOT NULL")
+	}
+	return strings.Join(names, " AND ")
 }
 
 func shouldSkipVirtualFK(tables []*Table, vfk query.VirtualJoin) bool {

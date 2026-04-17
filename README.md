@@ -68,7 +68,8 @@ Valuable types currently not implemented:
 |--add-fk|Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk="parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]". Example: --add-fk="customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id"|
 |--no-fk-guess|Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-foreign-keys.|
 |--no-skip-fields|Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found.|
-|--null-frequency|Define how frequent nullable fields should be NULL|
+|--null-freq|Define how frequent nullable fields should be NULL|
+|--null-freq-map|Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=73;t1.c2=4\" to set 73%% or 4%% of NULL for respective columns|
 |--quiet|Do not print progress bar|
 |--dry-run|Print queries to the standard output instead of inserting them into the db|
 |--debug|Show some debug information|
@@ -479,7 +480,7 @@ General:
 
 Stepping stones to fully reproduce cardinalities:
 - [ ] incorporating arbitrary values with fixed frequency into the bulk inserts, so that query parameters work.
-- [ ] table-per-table override for --rows, --null-frequency
+- [x] table-per-table override for --rows, --null-frequency
 - [ ] coin-flip-percent per relationship basis. Current thought: adding it to --binomial this way --binomial="parent=child:70" to set the coinflip to 70 for this link
 - [ ] parse col/index stats (cardinality + most_common_elems + most_common_freqs for postgres, cardinalities for MySQL)
 

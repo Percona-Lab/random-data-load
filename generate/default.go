@@ -3,16 +3,12 @@ package generate
 type DefaultKeyword struct {
 }
 
-func (r *DefaultKeyword) Value() interface{} {
-	return r.String()
-}
-
 func (r *DefaultKeyword) String() string {
 	return "DEFAULT"
 }
 
-func (r *DefaultKeyword) Quote() string {
-	return r.String()
+func (r *DefaultKeyword) IsQuotable() bool {
+	return false
 }
 
 func NewDefaultKeyword() *DefaultKeyword {

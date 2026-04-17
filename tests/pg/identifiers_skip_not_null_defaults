@@ -1,4 +1,4 @@
 CREATE TABLE t1 (
-	c1 integer,
+	c1 integer not null,
 	c2 varchar(30) not null default 'test'
 );

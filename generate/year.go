@@ -1,12 +1,12 @@
 package generate
 
-func NewRandomYear(name string, format int, allowNull bool) *RandomIntRange {
+func NewRandomYear(format int) *RandomIntRange {
 	if format == 2 {
-		return NewRandomIntRange(name, 01, 99, allowNull)
+		return NewRandomIntRange(01, 99)
 	}
-	return NewRandomIntRange(name, 1901, 2155, allowNull)
+	return NewRandomIntRange(1901, 2155)
 }
 
-func NewRandomYearRange(name string, min, max int64, allowNull bool) *RandomIntRange {
-	return NewRandomIntRange(name, min, max, allowNull)
+func NewRandomYearRange(min, max int64) *RandomIntRange {
+	return NewRandomIntRange(min, max)
 }

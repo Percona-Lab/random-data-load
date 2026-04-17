@@ -1,8 +1,6 @@
 package generate
 
 import (
-	"fmt"
-	"math/rand"
 	"regexp"
 	"strings"
 
@@ -12,7 +10,6 @@ import (
 // RandomString getter
 type RandomString struct {
 	value string
-	null  bool
 }
 
 var (
@@ -41,32 +38,18 @@ var (
 	language    = regexp.MustCompile(`language`)
 )
 
-func (r *RandomString) Value() interface{} {
-	if r.null {
-		return NULL
-	}
+func (r *RandomString) String() string {
 	return r.value
 }
 
-func (r *RandomString) String() string {
-	return r.Value().(string)
+func (r *RandomString) IsQuotable() bool {
+	return true
 }
 
-// Quote returns a quoted string
-func (r *RandomString) Quote() string {
-	if r.null {
-		return NULL
-	}
-	return fmt.Sprintf("'%s'", r.value)
-}
-
-func NewRandomString(name string, maxSize int64, allowNull bool) *RandomString {
+func NewRandomString(name string, maxSize int64) *RandomString {
 
 	name = strings.ToLower(name)
 
-	if allowNull && rand.Int63n(100) < NullFrequency {
-		return &RandomString{"", true}
-	}
 	var fn func() string
 
 	switch {
@@ -121,5 +104,5 @@ func NewRandomString(name string, maxSize int64, allowNull bool) *RandomString {
 	// quick and dirty fix to avoid breaking sql
 	// using ? placeholders would be better
 	s = strings.Replace(s, "'", "", -1)
-	return &RandomString{s, false}
+	return &RandomString{s}
 }
