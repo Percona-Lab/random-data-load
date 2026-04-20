@@ -335,7 +335,14 @@ func TestRun(t *testing.T) {
 			name:       "null_map",
 			checkQuery: "select (count(*) = 100000) AND (sum(CASE WHEN c1 IS NULL THEN 1 ELSE 0 END) between 19500 and 20500) AND (sum(CASE WHEN c2 IS NULL THEN 1 ELSE 0 END) between 39500 and 40500) AND (sum(CASE WHEN c3 IS NULL THEN 1 ELSE 0 END) between 89500 and 90500) from t1;",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=100000", "--table=t1", "--null-freq=20", "--null-freq-map=t1.c2=40;t1.c3=90"}},
+			cmds:       [][]string{[]string{"--rows=100000", "--table=t1", "--null-freq=0.2", "--null-freq-map=t1.c2=0.4;t1.c3=0.9"}},
+		},
+
+		{
+			name:       "values_freq_map",
+			checkQuery: "select (count(*) = 100000) AND (sum(CASE WHEN c1 = 42 THEN 1 ELSE 0 END) between 79500 and 80500) AND (sum(CASE WHEN c1 = 7 THEN 1 ELSE 0 END) between 4500 and 5500) AND (sum(CASE WHEN c2 = 'pg' THEN 1 ELSE 0 END) between 36500 and 37500) AND (sum(CASE WHEN c2 = 'mysql' THEN 1 ELSE 0 END) between 33500 and 34500) AND (sum(CASE WHEN c2 = 'other' THEN 1 ELSE 0 END) between 400 and 600) from t1;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100000", "--table=t1", "--null-freq=0", "--values-freq-map=t1.c1=42:0.8,7:0.05;t1.c2=pg:0.37,mysql:0.34,other:0.005"}},
 		},
 	}
 

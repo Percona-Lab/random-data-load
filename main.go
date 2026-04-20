@@ -46,6 +46,7 @@ func main() {
 		kong.UsageOnError(),
 		kong.ValueMapper(&cli.Run.AddForeignKeys, query.VirtualJoins{}),
 		kong.ValueMapper(&cli.Run.NullFreqMap, &frequency.FrequencyNullParameter{}),
+		kong.ValueMapper(&cli.Run.ValuesFreqMap, &frequency.FrequencyIndexValuesParameter{}),
 		kong.Vars{
 			"version":        buildInfo,
 			"SequentialFlag": generate.SequentialFlag,

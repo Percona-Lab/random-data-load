@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math/rand"
 	"time"
+
+	"github.com/ylacancellera/random-data-load/frequency"
 )
 
 type Getter interface {
@@ -21,6 +23,10 @@ const (
 	oneYear = int64(60 * 60 * 24 * 365)
 	NULL    = "NULL"
 )
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
 
 type Null struct{}
 
@@ -50,10 +56,14 @@ type GetterWrapper struct {
 	Elem Getter
 }
 
-func NewGetterWrapper(column string, nullFreq int) *GetterWrapper {
+func NewGetterWrapper(column string, isNullable bool, freq frequency.ColumnFrequency) *GetterWrapper {
 	wrapper := GetterWrapper{}
-	if nullFreq > 0 && rand.Int63n(100) < int64(nullFreq) {
+	if freq.Null(column, isNullable) {
 		wrapper.Elem = &Null{}
+	}
+	value, ok := freq.InjectIndexValue(column)
+	if ok {
+		wrapper.Elem = &RandomString{value: value}
 	}
 
 	return &wrapper
@@ -76,8 +86,4 @@ func (gw *GetterWrapper) String() string {
 
 func (gw *GetterWrapper) IsQuotable() bool {
 	return gw.IsQuotable()
-}
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
 }

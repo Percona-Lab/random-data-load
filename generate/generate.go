@@ -294,9 +294,9 @@ func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
 func (in *Insert) generateFieldsRow(fields []db.Field, insertValues []Getter) {
 	for colIndex := range insertValues {
 		field := fields[colIndex]
-		gw := NewGetterWrapper(field.ColumnName, in.frequencies.NullForColumn(field.ColumnName, field.IsNullable))
+		gw := NewGetterWrapper(field.ColumnName, field.IsNullable, in.frequencies)
 		if gw.Elem != nil {
-			goto SKIP_NULL
+			goto SKIP
 		}
 		switch field.DataType {
 		case "bool", "boolean":
@@ -335,7 +335,7 @@ func (in *Insert) generateFieldsRow(fields []db.Field, insertValues []Getter) {
 		default:
 			log.Error().Str("type", field.DataType).Str("field", field.ColumnName).Msg("unsupported datatypes when generating fields")
 		}
-	SKIP_NULL:
+	SKIP:
 		insertValues[colIndex] = gw
 	}
 }

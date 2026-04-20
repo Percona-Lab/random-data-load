@@ -70,6 +70,7 @@ Valuable types currently not implemented:
 |--no-skip-fields|Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found.|
 |--null-freq|Define how frequent nullable fields should be NULL|
 |--null-freq-map|Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=73;t1.c2=4\" to set 73%% or 4%% of NULL for respective columns|
+|--values-freq-map|Inject arbitrary values at fixed frequencies. The format is "--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99" so that val1 will be on 75%% of rows and val2 on 23%% for column c1|
 |--quiet|Do not print progress bar|
 |--dry-run|Print queries to the standard output instead of inserting them into the db|
 |--debug|Show some debug information|
@@ -476,18 +477,25 @@ General:
 - [x] use more gofakeit generators with regexes to generate "legit" data when possible
 - [ ] helpers to get schema (generate pgdump/mysqldump commands, get index stats, ...)
 - [ ] protect against foreign key cycles. Both explicits and implicits (avoid generating implicits that would end up causing loops)
-- [ ] guessing joins on subqueries/cte. Joins wouldn't be based on columns, but on expressions
+- [ ] have some graph to show --coin-flip-percent with --bulk-size
+- [ ] using --values-freq-map to make query parameters work
 
 Stepping stones to fully reproduce cardinalities:
-- [ ] incorporating arbitrary values with fixed frequency into the bulk inserts, so that query parameters work.
+- [x] incorporating arbitrary values with fixed frequency into the bulk inserts
 - [x] table-per-table override for --rows, --null-frequency
 - [ ] coin-flip-percent per relationship basis. Current thought: adding it to --binomial this way --binomial="parent=child:70" to set the coinflip to 70 for this link
 - [ ] parse col/index stats (cardinality + most_common_elems + most_common_freqs for postgres, cardinalities for MySQL)
 
 Without clear plan:
 - [ ] More random algorithms (as of now, no good implementations has been found for pareto that wouldn't provoke huge runtime and/or huge memory consumption, unless implemented fields are restricted to integers)
+- [ ] guessing joins on subqueries/cte. Joins wouldn't be based on columns, but on expressions
 
 ## Version history
+
+#### 0.2.3
+- NULL and/or fixed values can be injected at fixed rates
+- --rows can be overriden per tables 
+- improved virtual join handling to enable columns used for many foreign keys
 
 #### 0.2.0
 - Support for postgres
