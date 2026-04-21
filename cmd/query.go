@@ -15,15 +15,17 @@ func (cmd *QueryCmd) Run() error {
 	var (
 		tables, identifiers map[string]struct{}
 		//joins               map[string]string
-		joins []query.VirtualJoin
-		err   error
+		joins       []query.VirtualJoin
+		queryParams map[string][]string
+		err         error
 	)
-	tables, identifiers, joins, err = query.ParseQuery(cmd.Query, cmd.Engine, false)
+	tables, identifiers, joins, queryParams, err = query.ParseQuery(cmd.Query, cmd.Engine, false)
 	if err != nil {
 		return err
 	}
 	fmt.Println("tables", tables)
 	fmt.Println("joins", joins)
 	fmt.Println("identifiers", identifiers)
+	fmt.Println("queryParams", queryParams)
 	return nil
 }

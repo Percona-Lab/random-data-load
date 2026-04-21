@@ -11,8 +11,10 @@ import (
 )
 
 var aliases = map[string]string{} // only help to identify implicit joins
+var tables map[string]struct{}
 
-func ParseQuery(query, engine string, skipJoins bool) (map[string]struct{}, map[string]struct{}, []VirtualJoin, error) {
+// ParseQuery will return the list of tables, every raw identifiers used (including tables again), every joins it could detect, and a mapping of query parameters
+func ParseQuery(query, engine string, skipJoins bool) (map[string]struct{}, map[string]struct{}, []VirtualJoin, map[string][]string, error) {
 
 	var parsed ast.Node
 	var err error
@@ -21,7 +23,7 @@ func ParseQuery(query, engine string, skipJoins bool) (map[string]struct{}, map[
 	case "mysql":
 		parsed, err = mysql.Engine().Parse("", query)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	case "pg":
 		parse := func(source, input string) (ast.Node, error) {
@@ -30,19 +32,20 @@ func ParseQuery(query, engine string, skipJoins bool) (map[string]struct{}, map[
 		engine := rewrite.New("pg", rewrite.Parser(parse))
 		parsed, err = engine.Parse("", query)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 	default:
-		return nil, nil, nil, errors.New("unimplemented engine")
+		return nil, nil, nil, nil, errors.New("unimplemented engine")
 	}
 
-	tables := traverseTables(parsed)
+	tables = traverseTables(parsed)
 	identifiers := traverseIdentifiers(parsed)
 	joins := []VirtualJoin{}
 	if !skipJoins {
 		joins = traverseJoins(parsed)
 	}
-	return tables, identifiers, joins, nil
+	queryParams := traverseQueryParameters(parsed)
+	return tables, identifiers, joins, queryParams, nil
 }
 
 func traverseIdentifiers(n ast.Node) map[string]struct{} {
@@ -129,8 +132,8 @@ func traverseJoins(n ast.Node) []VirtualJoin {
 				//case ast.List
 				case ast.Infix:
 					//tmp := clause.Expression.(ast.Infix)
-					leftTable, leftCol := joinRemoveAliases(clause.Left)
-					rightTable, rightCol := joinRemoveAliases(clause.Right)
+					leftTable, leftCol := getTableColFromInfix(clause.Left)
+					rightTable, rightCol := getTableColFromInfix(clause.Right)
 					log.Debug().Str("left", leftTable).Str("right", rightTable).Type("clause", clause).Msg("JoinTraverser")
 					if leftTable == "" || rightTable == "" {
 						log.Debug().Type("left type", clause.Left).Type("right type", clause.Right).Str("left table", leftTable).Str("right table", rightTable).Str("left col", leftCol).Str("right col", rightCol).Msg("left or right side is empty in JoinTraverser, skipping")
@@ -159,6 +162,43 @@ func traverseJoins(n ast.Node) []VirtualJoin {
 	return joins
 }
 
+func traverseQueryParameters(n ast.Node) map[string][]string {
+
+	queryParams := map[string][]string{}
+
+	traverser := func(n ast.Node) bool {
+		switch n := n.(type) {
+		case ast.Infix:
+			switch {
+			case n.Is("="):
+				leftTable, leftCol := getTableColumnFromInfixOrLeaf(n.Left)
+				id := leftTable + "." + leftCol
+				switch right := n.Right.(type) {
+				case ast.Leaf:
+					queryParams[id] = append(queryParams[id], []string{right.String()}...)
+				}
+			case n.Is("IN"):
+				leftTable, leftCol := getTableColumnFromInfixOrLeaf(n.Left)
+				id := leftTable + "." + leftCol
+				switch right := n.Right.(type) {
+				case ast.List:
+					values := []string{}
+					for _, item := range right.Items {
+						if val := getItemValue(item.Expression); val != "" {
+							values = append(values, val)
+						}
+					}
+					queryParams[id] = append(queryParams[id], values...)
+				}
+			}
+		}
+		return true
+	}
+
+	n.Traverse(traverser)
+	return queryParams
+}
+
 // Differs from ast.Tablename for how alias are handled,
 // JOINs are removed because they handled a layer above not to miss the left nodes
 func tableName(expr ast.Node) string {
@@ -178,7 +218,7 @@ func tableName(expr ast.Node) string {
 	return "" // Anonymous table
 }
 
-func joinRemoveAliases(expr ast.Node) (string, string) {
+func getTableColFromInfix(expr ast.Node) (string, string) {
 	switch expr := expr.(type) {
 	case ast.Infix:
 		left := expr.Left.(ast.Leaf)
@@ -192,7 +232,25 @@ func joinRemoveAliases(expr ast.Node) (string, string) {
 		}
 		return tablename, right.Token.Str
 	default:
-		log.Debug().Type("node", expr).Msg("joinRemoveAliases unhandled type")
+		log.Debug().Type("node", expr).Msg("getTableColFromInfix unhandled type")
+	}
+	return "", ""
+}
+
+func getTableColumnFromInfixOrLeaf(expr ast.Node) (string, string) {
+	switch expr := expr.(type) {
+	case ast.Infix:
+		return getTableColFromInfix(expr)
+	case ast.Leaf:
+		if len(tables) != 1 {
+			log.Debug().Type("node", expr).Msg("column is a leaf, but there's multiple tables, potentially ambiguous column name, skipping")
+			return "", ""
+		}
+		for table := range tables {
+			return table, expr.Token.Str
+		}
+	default:
+		log.Debug().Type("node", expr).Msg("getTableColumnFromInfixOrLeaf unhandled type")
 	}
 	return "", ""
 }
@@ -202,4 +260,12 @@ func removeAlias(s string) string {
 		return s2
 	}
 	return s
+}
+
+func getItemValue(expr ast.Node) string {
+	switch expr := expr.(type) {
+	case ast.Leaf:
+		return expr.String()
+	}
+	return ""
 }

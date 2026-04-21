@@ -63,14 +63,14 @@ Valuable types currently not implemented:
 |--query|Providing a query will analyze its schema usage, insert recursively into tables, and identify implicit joins|
 |--default-relationship|Will define the default foreign-key relationship to apply. Possible values: binomial,sequential. The default relation can be overriden with other parameters --binomial or --sequential|
 |--binomial|Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). Format should be "parent_table=child_table". E.g: --binomial="customers=orders;orders=items"|
-|--coin-flip-percent|When used with --binomial, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --sequential (Default: 1)|
+|--coin-flip-percent|When used with --binomial, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --sequential (Default: 1)|
 |--sequential|Defines a sequential foreign key links relationships. Format should be "parent_table=child_table". E.g: --sequential="citizens=ssns"|
 |--add-fk|Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk="parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]". Example: --add-fk="customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id"|
 |--no-fk-guess|Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-foreign-keys.|
 |--no-skip-fields|Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found.|
 |--null-freq|Define how frequent nullable fields should be NULL|
-|--null-freq-map|Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=73;t1.c2=4\" to set 73%% or 4%% of NULL for respective columns|
-|--values-freq-map|Inject arbitrary values at fixed frequencies. The format is "--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99" so that val1 will be on 75%% of rows and val2 on 23%% for column c1|
+|--null-freq-map|Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=73;t1.c2=4\" to set 73% or 4% of NULL for respective columns|
+|--values-freq-map|Inject arbitrary values at fixed frequencies. The format is "--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99" so that val1 will be on 75% of rows and val2 on 23% for column c1|
 |--quiet|Do not print progress bar|
 |--dry-run|Print queries to the standard output instead of inserting them into the db|
 |--debug|Show some debug information|
@@ -343,7 +343,9 @@ postgres=# select oi.product_no, count(*) from order_items oi group by 1 order b
 |--add-foreign-keys|Add foreign keys, if they are not explicitely created in the table schema. The format must be parent_table.col1=child_table.col2. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Example --add-foreign-keys="customers.id=purchases.customer_id;purchases.id=items.purchase_id"|
 |--no-fk-guess|Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-foreign-keys.|
 |--no-skip-fields|Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found.|
-|--null-frequency|Define how frequent nullable fields should be NULL|
+|--null-freq|Define how frequent nullable fields should be NULL by default|
+|--values-freq-map|Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is "--null-freq-map=t1.c1=73;t1.c2=4" to set 73%% or 4%% of NULL for respective columns
+|--query-param-freq|Frequency at which to insert arbitrary values guessed from the query parameters. = and IN operators are handled. Can be disabled when set to 0.0.|
 |--quiet|Do not print progress bar|
 |--dry-run|Print queries to the standard output instead of inserting them into the db|
 |--debug|Show some debug information|
@@ -477,8 +479,9 @@ General:
 - [x] use more gofakeit generators with regexes to generate "legit" data when possible
 - [ ] helpers to get schema (generate pgdump/mysqldump commands, get index stats, ...)
 - [ ] protect against foreign key cycles. Both explicits and implicits (avoid generating implicits that would end up causing loops)
+- [ ] detect selfpointing foreign keys 
 - [ ] have some graph to show --coin-flip-percent with --bulk-size
-- [ ] using --values-freq-map to make query parameters work
+- [x] using --values-freq-map to make query parameters work
 
 Stepping stones to fully reproduce cardinalities:
 - [x] incorporating arbitrary values with fixed frequency into the bulk inserts
@@ -489,6 +492,7 @@ Stepping stones to fully reproduce cardinalities:
 Without clear plan:
 - [ ] More random algorithms (as of now, no good implementations has been found for pareto that wouldn't provoke huge runtime and/or huge memory consumption, unless implemented fields are restricted to integers)
 - [ ] guessing joins on subqueries/cte. Joins wouldn't be based on columns, but on expressions
+- [ ] be able to "suplement" existing foreign keys with additional columns ?
 
 ## Version history
 

@@ -3,16 +3,18 @@ package frequency
 import (
 	"math/rand"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/alecthomas/kong"
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog/log"
 )
 
 type TableFrequency map[string]ColumnFrequency
 
-var sharedTableFrequency map[string]ColumnFrequency // to merge parameters into a single array
+var SharedTableFrequency map[string]ColumnFrequency // to merge parameters into a single array
 
 type ColumnFrequency map[string]Frequency
 
@@ -27,7 +29,7 @@ type FrequencyNullParameter TableFrequency
 var ErrMalformedFrequencyNullParameter = errors.New("malformed null frequency mapping, the format is \"table.col=(0.0-1.0)[;table.col2=(0.0-1.0)]\". Example \nitems.tags=0.63;items.price=0\"")
 
 func init() {
-	sharedTableFrequency = map[string]ColumnFrequency{}
+	SharedTableFrequency = map[string]ColumnFrequency{}
 }
 
 func (fnp *FrequencyNullParameter) Decode(ctx *kong.DecodeContext, target reflect.Value) error {
@@ -61,17 +63,17 @@ func (fnp *FrequencyNullParameter) Decode(ctx *kong.DecodeContext, target reflec
 		}
 
 		var ok bool
-		if colMap, ok = sharedTableFrequency[tableColParts[0]]; !ok {
+		if colMap, ok = SharedTableFrequency[tableColParts[0]]; !ok {
 			colMap = map[string]Frequency{}
 		}
 		colMap[tableColParts[1]] = Frequency{
 			Null: freq,
 		}
-		sharedTableFrequency[tableColParts[0]] = colMap
+		SharedTableFrequency[tableColParts[0]] = colMap
 	}
 
 AFFECT_NONETHELESS:
-	target.Set(reflect.ValueOf(sharedTableFrequency))
+	target.Set(reflect.ValueOf(SharedTableFrequency))
 	return nil
 }
 
@@ -130,19 +132,19 @@ func (fnp *FrequencyIndexValuesParameter) Decode(ctx *kong.DecodeContext, target
 			}
 
 			var ok bool
-			if colMap, ok = sharedTableFrequency[tableColParts[0]]; !ok {
+			if colMap, ok = SharedTableFrequency[tableColParts[0]]; !ok {
 				colMap = map[string]Frequency{}
 			}
 			storedFreq := colMap[tableColParts[1]]
 			storedFreq.IndexValues = append(storedFreq.IndexValues, valFreqParts[0])
 			storedFreq.IndexFrequencies = append(storedFreq.IndexFrequencies, freq)
 			colMap[tableColParts[1]] = storedFreq
-			sharedTableFrequency[tableColParts[0]] = colMap
+			SharedTableFrequency[tableColParts[0]] = colMap
 		}
 	}
 
 AFFECT_NONETHELESS:
-	target.Set(reflect.ValueOf(sharedTableFrequency))
+	target.Set(reflect.ValueOf(SharedTableFrequency))
 	return nil
 }
 
@@ -166,4 +168,27 @@ func (c ColumnFrequency) InjectIndexValue(col string) (string, bool) {
 	}
 
 	return "", false
+}
+
+func MergeQueryParameters(params map[string][]string, defaultFrequency float64) {
+	for tableCol, values := range params {
+		parts := strings.Split(tableCol, ".")
+		if len(parts) != 2 {
+			log.Debug().Str("queryParams idx", tableCol).Msg("queryParams malformed")
+			continue
+		}
+		colFreqMap, ok := SharedTableFrequency[parts[0]]
+		if !ok {
+			colFreqMap = map[string]Frequency{}
+		}
+		freq, ok := colFreqMap[parts[1]]
+		if !ok {
+			freq = Frequency{}
+		}
+		freq.IndexValues = append(freq.IndexValues, values...)
+		freq.IndexFrequencies = append(freq.IndexFrequencies, slices.Repeat([]float64{defaultFrequency}, len(values))...)
+		colFreqMap[parts[1]] = freq
+		SharedTableFrequency[parts[0]] = colFreqMap
+	}
+
 }

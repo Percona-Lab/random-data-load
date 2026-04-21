@@ -344,6 +344,21 @@ func TestRun(t *testing.T) {
 			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100000", "--table=t1", "--null-freq=0", "--values-freq-map=t1.c1=42:0.8,7:0.05;t1.c2=pg:0.37,mysql:0.34,other:0.005"}},
 		},
+
+		{
+			name:       "query_params",
+			checkQuery: "select (count(*) = 100000) AND (sum(CASE WHEN c2 = 'it' THEN 1 ELSE 0 END) between 9500 and 10500) AND (sum(CASE WHEN c2 = 'should' THEN 1 ELSE 0 END) between 9500 and 10500) AND (sum(CASE WHEN c2 = 'work' THEN 1 ELSE 0 END) between 9500 and 10500) from t1;",
+			inputQuery: "select * from t1 where t1.c2 in ('it', 'should', 'work')",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100000", "--table=t1", "--null-freq=0", "--query-param-freq=0.1"}},
+		},
+		{
+			name:       "query_params_no_infix",
+			checkQuery: "select (count(*) = 100000) AND (sum(CASE WHEN c2 = 'it' THEN 1 ELSE 0 END) between 9500 and 10500) AND (sum(CASE WHEN c2 = 'should' THEN 1 ELSE 0 END) between 9500 and 10500) AND (sum(CASE WHEN c2 = 'work' THEN 1 ELSE 0 END) between 9500 and 10500) from t1;",
+			inputQuery: "select * from t1 where c2 in ('it', 'should', 'work')",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100000", "--table=t1", "--null-freq=0", "--query-param-freq=0.1"}},
+		},
 	}
 
 	for _, test := range tests {

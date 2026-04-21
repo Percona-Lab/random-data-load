@@ -31,12 +31,13 @@ type RunCmd struct {
 	Query        string           `help:"Providing a query will enable to automatically discover the schema, insert recursively into tables, enforce implicit joins."`
 
 	generate.ForeignKeyLinks
-	AddForeignKeys query.VirtualJoins                      `name:"add-fk" help:"Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk=\"parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]\". Example: --add-fk=\"customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id\""`
-	NoFKGuess      bool                                    `name:"no-fk-guess" help:"Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-fk." `
-	NoSkipFields   bool                                    `name:"no-skip-fields" help:"Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found."`
-	NullFreq       float64                                 `name:"null-freq" help:"Define how frequent nullable fields should be NULL by default." default:"0.1"`
-	NullFreqMap    frequency.FrequencyNullParameter        `name:"null-freq-map" help:"Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=73;t1.c2=4\" to set 73%% or 4%% of NULL for respective columns" default:""`
-	ValuesFreqMap  frequency.FrequencyIndexValuesParameter `name:"values-freq-map" help:"Inject arbitrary values at fixed frequencies. The format is \"--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99\" so that val1 will be on 75%% of rows and val2 on 23%% for column c1" default:""` // TODO we're not checking if the total freq is above 1
+	AddForeignKeys  query.VirtualJoins                      `name:"add-fk" help:"Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk=\"parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]\". Example: --add-fk=\"customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id\""`
+	NoFKGuess       bool                                    `name:"no-fk-guess" help:"Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-fk." `
+	NoSkipFields    bool                                    `name:"no-skip-fields" help:"Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found."`
+	NullFreq        float64                                 `name:"null-freq" help:"Define how frequent nullable fields should be NULL by default." default:"0.1"`
+	NullFreqMap     frequency.FrequencyNullParameter        `name:"null-freq-map" help:"Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=73;t1.c2=4\" to set 73%% or 4%% of NULL for respective columns" default:""`
+	ValuesFreqMap   frequency.FrequencyIndexValuesParameter `name:"values-freq-map" help:"Inject arbitrary values at fixed frequencies. The format is \"--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99\" so that val1 will be on 75%% of rows and val2 on 23%% for column c1" default:""` // TODO we're not checking if the total freq is above 1
+	QueryParamsFreq float64                                 `name:"query-param-freq" help:"Frequency at which to insert arbitrary values guessed from the query parameters. = and IN operators are handled. Can be disabled when set to 0.0." default:"0.1"`
 }
 
 // Run starts inserting data.
@@ -48,10 +49,6 @@ func (cmd *RunCmd) Run() error {
 		return err
 	}
 
-	frequency.DefaultNullFrequency = cmd.NullFreq
-	log.Debug().Interface("freq-map", cmd.NullFreqMap).Msg("frequency maps parsed")
-	log.Debug().Interface("freq-map", cmd.ValuesFreqMap).Msg("frequency maps parsed")
-
 	if (float64(cmd.Rows) * cmd.CoinFlipPercent) < (float64(cmd.BulkSize) / 2) {
 		cmd.CoinFlipPercent = float64(cmd.BulkSize) / float64(cmd.Rows) / 2
 		log.Info().Msgf("Increasing --coin-flip-percent to %.10f due to low --rows to ensure we can at least sample and get half of --bulk-size at a time", cmd.CoinFlipPercent)
@@ -59,25 +56,30 @@ func (cmd *RunCmd) Run() error {
 
 	tablesNames := map[string]struct{}{}
 	identifiers := map[string]struct{}{}
-	//joins := map[string]string{}
 	joins := []query.VirtualJoin{}
+	queryParams := map[string][]string{}
 
 	if cmd.Query == "" && cmd.Table == "" {
 		return errors.New("Need either a --query or a --table")
 	}
 
 	if cmd.Query != "" {
-		tablesNames, identifiers, joins, err = query.ParseQuery(cmd.Query, cmd.DB.Engine, cmd.NoFKGuess)
+		tablesNames, identifiers, joins, queryParams, err = query.ParseQuery(cmd.Query, cmd.DB.Engine, cmd.NoFKGuess)
 		if err != nil {
 			return err
 		}
-		log.Debug().Interface("identifiers", identifiers).Interface("joins", joins).Msg("query parsed")
+		log.Debug().Interface("identifiers", identifiers).Interface("joins", joins).Interface("queryParams", queryParams).Msg("query parsed")
 	}
 	// if --table is given, we will restrict inserts to this table only
 	// we will still skip some columns and potentially have virtual FKs
 	if cmd.Table != "" {
 		tablesNames = map[string]struct{}{cmd.Table: struct{}{}}
 	}
+
+	frequency.DefaultNullFrequency = cmd.NullFreq
+	log.Debug().Interface("freq-map", frequency.SharedTableFrequency).Msg("frequency maps parsed")
+	frequency.MergeQueryParameters(queryParams, cmd.QueryParamsFreq)
+	log.Debug().Interface("freq-map", frequency.SharedTableFrequency).Msg("merged query params into frequency map")
 
 	// loading base tables
 	tables := []*db.Table{}
@@ -128,7 +130,7 @@ func (cmd *RunCmd) Run() error {
 
 func (cmd *RunCmd) run(table *db.Table) error {
 	rows := valueForTable(cmd.Rows, cmd.RowsPerTable, table.Name)
-	colNullFreqs := cmd.NullFreqMap[table.Name]
+	colNullFreqs := frequency.SharedTableFrequency[table.Name]
 	ins := generate.New(table, cmd.ForeignKeyLinks, cmd.WorkersCount, cmd.MaxTextSize, cmd.UUIDVersion, colNullFreqs)
 
 	if !cmd.Quiet && !cmd.DryRun {
