@@ -478,8 +478,8 @@ General:
 - [ ] better datetime random generation. It should be flexible over its range
 - [x] use more gofakeit generators with regexes to generate "legit" data when possible
 - [ ] helpers to get schema (generate pgdump/mysqldump commands, get index stats, ...)
-- [ ] protect against foreign key cycles. Both explicits and implicits (avoid generating implicits that would end up causing loops)
-- [ ] detect selfpointing foreign keys 
+- [x] protect against foreign key cycles. Both explicits and implicits (avoid generating implicits that would end up causing loops)
+- [x] detect selfpointing foreign keys 
 - [ ] have some graph to show --coin-flip-percent with --bulk-size
 - [x] using --values-freq-map to make query parameters work
 
@@ -497,9 +497,13 @@ Without clear plan:
 ## Version history
 
 #### 0.2.3
-- NULL and/or fixed values can be injected at fixed rates
+- NULL and/or fixed values can be injected at tunable rates
 - --rows can be overriden per tables 
 - improved virtual join handling to enable columns used for many foreign keys
+- query parameters are being inserted at tunable frequencies so that query can work as is 
+- protection against circular dependencies
+- self-referencing tables handling through splitting the tables in two. Half the table will reference the other half
+
 
 #### 0.2.0
 - Support for postgres

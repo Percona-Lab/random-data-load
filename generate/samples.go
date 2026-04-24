@@ -47,7 +47,7 @@ func (s *sampleCommon) query(query string, values [][]Getter) error {
 			return errors.Wrapf(err, "failed to scan samples with query %s", query)
 		}
 		for fieldIdx := range s.fields {
-			values[rowIdx][fieldIdx] = scannedGetter[fieldIdx]
+			values[rowIdx][fieldIdx] = &GetterWrapper{scannedGetter[fieldIdx]}
 		}
 
 		rowIdx = rowIdx + 1

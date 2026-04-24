@@ -21,7 +21,7 @@ type RunCmd struct {
 
 	Table        string           `help:"Table to insert to. When using --query, --table will be used to restrict the tables to insert to."`
 	Rows         int64            `name:"rows" required:"true" help:"Number of rows to insert"`
-	RowsPerTable map[string]int64 `name:"rows-per-table" help:"Number of rows to insert per-table. Will have priority over --rows"`
+	RowsPerTable map[string]int64 `name:"rows-per-table" help:"Number of rows to insert per-table. Will have priority over --rows. Format is \"{table}=X\"" default:""`
 	BulkSize     int64            `name:"bulk-size" help:"Number of rows per insert statement" default:"1000"`
 	DryRun       bool             `name:"dry-run" help:"Print queries to the standard output instead of inserting them into the db"`
 	Quiet        bool             `name:"quiet" help:"Do not print progress bar"`
@@ -95,8 +95,27 @@ func (cmd *RunCmd) Run() error {
 
 		tables = append(tables, table)
 	}
+	// now we have the full table list, we check for any loops
+	for _, table := range tables {
+		copiedTable, err := table.IdentifyAndResolveSelfReferencingConstraintLoop()
+		if err != nil {
+			return err
+		}
+		if copiedTable != nil {
+			rows, ok := cmd.RowsPerTable[table.Name]
+			if !ok {
+				rows = cmd.Rows
+			}
+			log.Info().Str("table", table.Name).Int64("rows", rows/2).Msg("table has a self-referencing foreign key. Setting --rows to half for this table since we will insert twice to it to resolve the dependency.")
+			cmd.RowsPerTable[table.Name] = rows / 2
+			tables = append([]*db.Table{copiedTable}, tables...)
 
-	// now we have the full table list, we can autocomplete foreign keys
+		} else if table.HasAnyConstraintLoop() {
+			return errors.Errorf("table %s has a foreign key loop", table.Name)
+		}
+	}
+
+	// we can autocomplete foreign keys
 	joins = append(joins, cmd.AddForeignKeys...)
 	if len(joins) > 0 {
 		db.AddVirtualFKs(tables, joins)

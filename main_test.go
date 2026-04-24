@@ -199,6 +199,14 @@ func TestRun(t *testing.T) {
 		},
 
 		{
+			name:       "fk_pivot_varchar_integer",
+			checkQuery: "select count(*) = 100 from t1 join t3 on t1.order_id=t3.order_id join t2 on t2.id = t3.product_no;",
+			inputQuery: "select sum(t2.price), count(t1.*) from t1 join t3 on t1.order_id=t3.order_id join t2 on t2.id = t3.product_no where t1.currency='EUR';",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential"}},
+		},
+
+		{
 			name:       "basic_query",
 			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN c2 IS NULL THEN 1 ELSE 0 END) = 100)  from t1 where c1 is not null;",
 			inputQuery: "select c1 from t1;",
@@ -358,6 +366,13 @@ func TestRun(t *testing.T) {
 			inputQuery: "select * from t1 where c2 in ('it', 'should', 'work')",
 			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100000", "--table=t1", "--null-freq=0", "--query-param-freq=0.1"}},
+		},
+
+		{
+			name:       "fk_self_referencing",
+			checkQuery: "select count(*) = 500 from t1 join t1 t1_2 on t1.id = t1_2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=1000", "--table=t1", "--default-relationship=sequential"}},
 		},
 	}
 

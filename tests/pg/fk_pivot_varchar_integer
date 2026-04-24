@@ -1,0 +1,22 @@
+CREATE TABLE t1 (
+    order_id integer primary key generated always as identity,
+    shipping_address text NOT NULL,
+    country text,
+    zip text NOT NULL,
+    currency character varying(3) NOT NULL,
+    email character varying(100) NOT NULL
+);
+
+CREATE TABLE t2 (
+    id varchar(30) primary key,
+    product text NOT NULL,
+    price numeric NOT NULL,
+    material text,
+    feature text,
+    company text
+);
+
+CREATE TABLE t3 (
+    product_no varchar(30) NOT NULL,
+    order_id integer NOT NULL
+);
