@@ -164,3 +164,12 @@ func (_ Postgres) BinomialWhereClause(freqPercent float64) string {
 func (_ Postgres) ErrShouldRetryTx(err error) bool {
 	return strings.Contains(err.Error(), "duplicate key value violates unique constraint")
 }
+
+func (_ Postgres) FilterOnRowNumberFromClause(fields []Field, table, schema string) string {
+	escapedFields := EscapedNamesListFromFields(fields)
+	return fmt.Sprintf("(SELECT %s, ROW_NUMBER() OVER (ORDER BY %s) as rownumber FROM %s.%s ) f", escapedFields, escapedFields, Escape(schema), Escape(table))
+}
+
+func (_ Postgres) FilterOnRowNumberVarClause() string {
+	return "rownumber"
+}

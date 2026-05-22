@@ -480,8 +480,12 @@ General:
 - [ ] helpers to get schema (generate pgdump/mysqldump commands, get index stats, ...)
 - [x] protect against foreign key cycles. Both explicits and implicits (avoid generating implicits that would end up causing loops)
 - [x] detect selfpointing foreign keys 
-- [ ] have some graph to show --coin-flip-percent with --bulk-size
 - [x] using --values-freq-map to make query parameters work
+
+Sampling:
+- [x] normal law through box-muller, select sqrt(-2*log(random()))*sin(2*pi()*random());
+- [x] pareto laws
+- [ ] have some graph to show --coin-flip-percent with --bulk-size
 
 Stepping stones to fully reproduce cardinalities:
 - [x] incorporating arbitrary values with fixed frequency into the bulk inserts
@@ -490,7 +494,7 @@ Stepping stones to fully reproduce cardinalities:
 - [ ] parse col/index stats (cardinality + most_common_elems + most_common_freqs for postgres, cardinalities for MySQL)
 
 Without clear plan:
-- [ ] More random algorithms (as of now, no good implementations has been found for pareto that wouldn't provoke huge runtime and/or huge memory consumption, unless implemented fields are restricted to integers)
+- [x] More random algorithms (as of now, no good implementations has been found for pareto that wouldn't provoke huge runtime and/or huge memory consumption, unless implemented fields are restricted to integers)
 - [ ] guessing joins on subqueries/cte. Joins wouldn't be based on columns, but on expressions
 - [ ] be able to "suplement" existing foreign keys with additional columns ?
 

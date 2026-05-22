@@ -220,3 +220,11 @@ func (_ MySQL) BinomialWhereClause(freqPercent float64) string {
 func (_ MySQL) ErrShouldRetryTx(err error) bool {
 	return strings.Contains(err.Error(), "Duplicate entry")
 }
+
+func (_ MySQL) FilterOnRowNumberFromClause(_ []Field, table, schema string) string {
+	return fmt.Sprintf("%s.%s, (SELECT @rownumber := 0) f", Escape(schema), Escape(table))
+}
+
+func (_ MySQL) FilterOnRowNumberVarClause() string {
+	return "(@rownumber := @rownumber + 1)"
+}

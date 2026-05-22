@@ -2,7 +2,12 @@ package generate
 
 import (
 	"fmt"
+	"math"
+	"math/rand"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
@@ -13,7 +18,7 @@ type Sampler interface {
 	Sample() error
 }
 
-type SamplerBuilder func([]db.Field, string, string, string, [][]Getter, float64) Sampler
+type SamplerBuilder func([]db.Field, string, string, string, [][]Getter, float64, int64) Sampler
 
 type sampleCommon struct {
 	schema string
@@ -113,7 +118,7 @@ func (s *UniformSample) Sample() error {
 var storedUniformSamples = map[string]*UniformSample{}
 var storedUniformSamplesMutex = sync.Mutex{}
 
-func NewUniformSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, _ float64) Sampler {
+func NewUniformSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, _ float64, tableSize int64) Sampler {
 	storedUniformSamplesMutex.Lock()
 	defer storedUniformSamplesMutex.Unlock()
 	if s, ok := storedUniformSamples[tablename+constraintName]; ok {
@@ -143,7 +148,7 @@ func (s *DBRandomSample) Sample() error {
 	return s.query(query, s.values)
 }
 
-func NewDBRandomSample(fields []db.Field, schema, name, _ string, values [][]Getter, samplePercent float64) Sampler {
+func NewDBRandomSample(fields []db.Field, schema, name, _ string, values [][]Getter, samplePercent float64, _ int64) Sampler {
 	s := &DBRandomSample{}
 	s.table = name
 	s.schema = schema
@@ -151,5 +156,92 @@ func NewDBRandomSample(fields []db.Field, schema, name, _ string, values [][]Get
 	s.limit = len(values)
 	s.values = values
 	s.fields = fields
+	return s
+}
+
+type BoxMullerSample struct {
+	sampleCommon
+	stddev    float64
+	mean      float64
+	tableSize int64
+}
+
+// box muller
+// currently has a "distribution" bug I cannot figure out, there's a spike of probability around what should have been the 25 quartile
+// maybe it's tied to the fact boxmuller expects [0.0,1.0] for u1 u2, but golang can only provide [0.0,1.0[
+// stddev/mean does not affect it, it does not look like a float related issues but it most probably is
+func (s *BoxMullerSample) Sample() error {
+
+	rowNumbers := make([]string, s.limit)
+	for i := range rowNumbers {
+		var cosId int64 = -1
+		x1, x2 := rand.Float64(), rand.Float64()
+		for cosId < 0 || cosId > s.tableSize {
+			cosId = int64(math.Round(s.mean + s.stddev*math.Sqrt(-2*math.Log(x1))*math.Cos(2*math.Pi*x2)))
+		}
+		rowNumbers[i] = strconv.FormatInt(cosId, 10)
+	}
+
+	escapedFields := db.EscapedNamesListFromFields(s.fields)
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s IN (%s) AND %s LIMIT %d",
+		escapedFields,
+		db.FilterOnRowNumberFromClause(s.fields, s.table, s.schema),
+		db.FilterOnRowNumberVarClause(),
+		strings.Join(rowNumbers, ","),
+		db.EscapedFieldsIsNotNull(s.fields),
+		s.limit,
+	)
+
+	return s.query(query, s.values)
+}
+
+func NewBoxMullerSample(fields []db.Field, schema, name, _ string, values [][]Getter, _ float64, tableSize int64) Sampler {
+	s := &BoxMullerSample{}
+	s.table = name
+	s.schema = schema
+	s.limit = len(values)
+	s.values = values
+	s.fields = fields
+	s.tableSize = tableSize
+	// TODO
+	s.stddev = float64(s.limit)
+	s.mean = float64(tableSize) / 2
+	return s
+}
+
+type ZipfSample struct {
+	sampleCommon
+	zipfRand *rand.Zipf
+}
+
+func (s *ZipfSample) Sample() error {
+
+	rowNumbers := make([]string, s.limit)
+	for i := range rowNumbers {
+		rowNumbers[i] = strconv.Itoa(int(s.zipfRand.Uint64()))
+	}
+	escapedFields := db.EscapedNamesListFromFields(s.fields)
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s IN (%s) AND %s LIMIT %d",
+		escapedFields,
+		db.FilterOnRowNumberFromClause(s.fields, s.table, s.schema),
+		db.FilterOnRowNumberVarClause(),
+		strings.Join(rowNumbers, ","),
+		db.EscapedFieldsIsNotNull(s.fields),
+		s.limit,
+	)
+
+	return s.query(query, s.values)
+}
+
+func NewZipfSample(fields []db.Field, schema, name, _ string, values [][]Getter, _ float64, tableSize int64) Sampler {
+	s := &ZipfSample{}
+	s.table = name
+	s.schema = schema
+	s.limit = len(values)
+	s.values = values
+	s.fields = fields
+
+	s.zipfRand = rand.NewZipf(rand.New(rand.NewSource(time.Now().UnixNano())), 1.1, 1.0, uint64(tableSize))
+
 	return s
 }

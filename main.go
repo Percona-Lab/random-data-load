@@ -51,6 +51,8 @@ func main() {
 			"version":        buildInfo,
 			"SequentialFlag": generate.SequentialFlag,
 			"BinomialFlag":   generate.BinomialFlag,
+			"NormalFlag":     generate.NormalFlag,
+			"ParetoFlag":     generate.ParetoFlag,
 		},
 		kong.ConfigureHelp(kong.HelpOptions{
 			Compact: false,

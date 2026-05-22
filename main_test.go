@@ -182,6 +182,18 @@ func TestRun(t *testing.T) {
 			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=binomial", "--coin-flip-percent=60"}},
 		},
+		{
+			name:       "fk_pareto",
+			checkQuery: "select count(distinct t1.id) between 1 and 99 from t1 join t2 on t1.id = t2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=pareto"}},
+		},
+		{
+			name:       "fk_normal",
+			checkQuery: "select count(distinct t1.id) between 1 and 99 from t1 join t2 on t1.id = t2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=normal", "--bulk-size=10"}},
+		},
 
 		// 5% of 1000 will end up being 50, but we need 100 samples per chunks and t1_id has NOT NULL so it has to loop to get more samples
 		{

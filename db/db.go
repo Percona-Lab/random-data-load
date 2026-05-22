@@ -28,6 +28,8 @@ type Engine interface {
 	SetTableMetadata(*Table, string, string)
 	BinomialWhereClause(float64) string
 	ErrShouldRetryTx(error) bool
+	FilterOnRowNumberFromClause([]Field, string, string) string
+	FilterOnRowNumberVarClause() string
 }
 
 var ErrFieldsNotFound = errors.New("fields not found")
@@ -76,4 +78,12 @@ func BinomialWhereClause(freqPercent float64) string {
 
 func ErrShouldRetryTx(err error) bool {
 	return engine.ErrShouldRetryTx(err)
+}
+
+func FilterOnRowNumberFromClause(fields []Field, table, schema string) string {
+	return engine.FilterOnRowNumberFromClause(fields, table, schema)
+}
+
+func FilterOnRowNumberVarClause() string {
+	return engine.FilterOnRowNumberVarClause()
 }

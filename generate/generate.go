@@ -17,33 +17,40 @@ import (
 )
 
 type Insert struct {
-	table        *db.Table
-	writer       io.Writer
-	NotifyChan   chan int64
-	fklinks      ForeignKeyLinks
-	workersCount int
-	insertMutex  sync.Mutex
-	maxTextSize  int64
-	uuidVersion  int
-	maxRetries   int
-	frequencies  frequency.ColumnFrequency
+	table             *db.Table
+	writer            io.Writer
+	NotifyChan        chan int64
+	fklinks           ForeignKeyLinks
+	workersCount      int
+	insertMutex       sync.Mutex
+	maxTextSize       int64
+	uuidVersion       int
+	maxRetries        int
+	frequencies       frequency.ColumnFrequency
+	expectedTableSize int64
 }
 
 type ForeignKeyLinks struct {
-	DefaultRelationship string            `name:"default-relationship" help:"Will define the default foreign-key relationship to apply. Possible values: ${BinomialFlag},${SequentialFlag}. The default relation can be overriden with other parameters --${BinomialFlag} or --${SequentialFlag}" enum:"${BinomialFlag},${SequentialFlag}" default:"${BinomialFlag}"`
+	DefaultRelationship string            `name:"default-relationship" help:"Will define the default foreign-key relationship to apply. Possible values: ${BinomialFlag},${SequentialFlag}. The default relation can be overriden with other parameters --${BinomialFlag} or --${SequentialFlag}" enum:"${BinomialFlag},${SequentialFlag},${NormalFlag},${ParetoFlag}" default:"${BinomialFlag}"`
 	Binomial            map[string]string ` help:"Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). Format should be \"parent_table=child_table\" E.g: --${BinomialFlag}=\"customers=orders;orders=items\""`
 	Sequential          map[string]string `name:"sequential" help:"Defines a sequential foreign key links relationships, using SELECT ... LIMIT x OFFET y. Format should be \"parent_table=child_table\" E.g: --${SequentialFlag}=\"citizens=ssns\""`
 	CoinFlipPercent     float64           `name:"coin-flip-percent" help:"When used with ${BinomialFlag}, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --${SequentialFlag}. Lower value (e.g 0.001) will also slow down the sampling speed" default:"1"`
+	Normal              map[string]string `help:"Defines a 1-N foreign key relationships using box-muller transformation to provide normal distribution"`
+	Pareto              map[string]string `help:"Defines a 1-N foreign key relationships using zipf (pareto) distribution"`
 }
 
 const (
 	SequentialFlag = "sequential"
 	BinomialFlag   = "binomial"
+	NormalFlag     = "normal"
+	ParetoFlag     = "pareto"
 )
 
 var fkLinkToSamplerCreator = map[string]SamplerBuilder{
 	SequentialFlag: NewUniformSample,
 	BinomialFlag:   NewDBRandomSample,
+	NormalFlag:     NewBoxMullerSample,
+	ParetoFlag:     NewZipfSample,
 }
 
 func (r ForeignKeyLinks) relationship(parent, child string) SamplerBuilder {
@@ -52,6 +59,12 @@ func (r ForeignKeyLinks) relationship(parent, child string) SamplerBuilder {
 	}
 	if r.Binomial[parent] == child {
 		return fkLinkToSamplerCreator[BinomialFlag]
+	}
+	if r.Normal[parent] == child {
+		return fkLinkToSamplerCreator[NormalFlag]
+	}
+	if r.Pareto[parent] == child {
+		return fkLinkToSamplerCreator[NormalFlag]
 	}
 	return fkLinkToSamplerCreator[r.DefaultRelationship]
 }
@@ -115,6 +128,7 @@ func (in *Insert) run(count int64, bulksize int64, dryRun bool) error {
 	completeInserts := count / bulksize
 	remainder := count - completeInserts*bulksize
 	numJobs := completeInserts + 1 // + remainder
+	in.expectedTableSize = count
 
 	bulksizeJobs := make(chan int64, numJobs)
 	errChan := make(chan error, numJobs)
@@ -354,7 +368,7 @@ func (in *Insert) sampleConstraints(constraints db.Constraints, values [][]Gette
 		}
 
 		samplerInit := in.fklinks.relationship(constraint.ReferencedTableName, in.table.Name)
-		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlice, in.fklinks.CoinFlipPercent)
+		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlice, in.fklinks.CoinFlipPercent, in.expectedTableSize)
 		err = sampler.Sample()
 		if err != nil {
 			return errors.Wrap(err, "sampleFieldsTable")
