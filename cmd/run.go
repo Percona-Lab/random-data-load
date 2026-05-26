@@ -49,9 +49,22 @@ func (cmd *RunCmd) Run() error {
 		return err
 	}
 
-	if (float64(cmd.Rows) * cmd.CoinFlipPercent) < (float64(cmd.BulkSize) / 2) {
+	if (cmd.DefaultRelationship == generate.BinomialFlag || len(cmd.Binomial) > 0) && (float64(cmd.Rows)*cmd.CoinFlipPercent) < (float64(cmd.BulkSize)/2) {
 		cmd.CoinFlipPercent = float64(cmd.BulkSize) / float64(cmd.Rows) / 2
 		log.Info().Msgf("Increasing --coin-flip-percent to %.10f due to low --rows to ensure we can at least sample and get half of --bulk-size at a time", cmd.CoinFlipPercent)
+	}
+	if cmd.DefaultRelationship == generate.NormalFlag || len(cmd.Normal) > 0 {
+		if cmd.NormalStddev == 0 {
+			cmd.NormalStddev = float64(cmd.Rows / 10)
+			log.Info().Msgf("Setting --normal-stddev to %.2f (--rows/10) by default", cmd.NormalStddev)
+		}
+		if cmd.NormalMean == 0 {
+			cmd.NormalMean = float64(cmd.Rows / 2)
+			log.Info().Msgf("Setting --normal-mean to %.2f (--rows/2) by default", cmd.NormalMean)
+		}
+	}
+	if (cmd.DefaultRelationship == generate.ParetoFlag || len(cmd.Pareto) > 0) && (cmd.ParetoS <= 1.0 || cmd.ParetoV < 1) {
+		return errors.New("--pareto-s needs to be >1, --pareto-v needs to be >=1")
 	}
 
 	tablesNames := map[string]struct{}{}

@@ -18,14 +18,17 @@ type Sampler interface {
 	Sample() error
 }
 
-type SamplerBuilder func([]db.Field, string, string, string, [][]Getter, float64, int64) Sampler
+type SamplerBuilder func([]db.Field, string, string, string, [][]Getter, int64, *ForeignKeyLinks) Sampler
 
 type sampleCommon struct {
-	schema string
-	table  string
-	fields []db.Field
-	values [][]Getter
-	limit  int
+	schema         string
+	table          string
+	constraintName string
+	fields         []db.Field
+	values         [][]Getter
+	limit          int
+	tableSize      int64
+	fkCli          *ForeignKeyLinks
 }
 
 func (s *sampleCommon) query(query string, values [][]Getter) error {
@@ -96,6 +99,18 @@ func (s *sampleCommon) getterFromField(f db.Field) ScannerGetter {
 	return nil
 }
 
+func (s *sampleCommon) Init(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, tableSize int64, fkCli *ForeignKeyLinks) {
+
+	s.table = tablename
+	s.schema = schema
+	s.constraintName = constraintName
+	s.limit = len(values)
+	s.values = values
+	s.fields = fields
+	s.tableSize = tableSize
+	s.fkCli = fkCli
+}
+
 type UniformSample struct {
 	sampleCommon
 	lastOffset int // paging by offset is bad, but it will work with compound pk, lack of pk, or complex pk types
@@ -118,7 +133,7 @@ func (s *UniformSample) Sample() error {
 var storedUniformSamples = map[string]*UniformSample{}
 var storedUniformSamplesMutex = sync.Mutex{}
 
-func NewUniformSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, _ float64, tableSize int64) Sampler {
+func NewUniformSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, tableSize int64, fkCli *ForeignKeyLinks) Sampler {
 	storedUniformSamplesMutex.Lock()
 	defer storedUniformSamplesMutex.Unlock()
 	if s, ok := storedUniformSamples[tablename+constraintName]; ok {
@@ -126,44 +141,35 @@ func NewUniformSample(fields []db.Field, schema, tablename, constraintName strin
 		return s
 	}
 	s := &UniformSample{}
-	s.table = tablename
-	s.schema = schema
-	s.limit = len(values)
-	s.values = values
-	s.fields = fields
+	s.Init(fields, schema, tablename, constraintName, values, tableSize, fkCli)
 	storedUniformSamples[tablename+constraintName] = s
 	return s
 }
 
 type DBRandomSample struct {
 	sampleCommon
-	samplePercent float64
+	coinFlipPercent float64
 }
 
 func (s *DBRandomSample) Sample() error {
 
 	query := fmt.Sprintf("SELECT %s FROM %s.%s %s AND %s ORDER BY 1 LIMIT %d",
-		db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table), db.BinomialWhereClause(s.samplePercent), db.EscapedFieldsIsNotNull(s.fields), s.limit)
+		db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table), db.BinomialWhereClause(s.coinFlipPercent), db.EscapedFieldsIsNotNull(s.fields), s.limit)
 
 	return s.query(query, s.values)
 }
 
-func NewDBRandomSample(fields []db.Field, schema, name, _ string, values [][]Getter, samplePercent float64, _ int64) Sampler {
+func NewDBRandomSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, tableSize int64, fkCli *ForeignKeyLinks) Sampler {
 	s := &DBRandomSample{}
-	s.table = name
-	s.schema = schema
-	s.samplePercent = samplePercent
-	s.limit = len(values)
-	s.values = values
-	s.fields = fields
+	s.Init(fields, schema, tablename, constraintName, values, tableSize, fkCli)
+	s.coinFlipPercent = fkCli.CoinFlipPercent
 	return s
 }
 
 type BoxMullerSample struct {
 	sampleCommon
-	stddev    float64
-	mean      float64
-	tableSize int64
+	stddev float64
+	mean   float64
 }
 
 // box muller
@@ -195,17 +201,12 @@ func (s *BoxMullerSample) Sample() error {
 	return s.query(query, s.values)
 }
 
-func NewBoxMullerSample(fields []db.Field, schema, name, _ string, values [][]Getter, _ float64, tableSize int64) Sampler {
+func NewBoxMullerSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, tableSize int64, fkCli *ForeignKeyLinks) Sampler {
 	s := &BoxMullerSample{}
-	s.table = name
-	s.schema = schema
-	s.limit = len(values)
-	s.values = values
-	s.fields = fields
-	s.tableSize = tableSize
-	// TODO
-	s.stddev = float64(s.limit)
-	s.mean = float64(tableSize) / 2
+	s.Init(fields, schema, tablename, constraintName, values, tableSize, fkCli)
+
+	s.stddev = fkCli.NormalStddev
+	s.mean = fkCli.NormalMean
 	return s
 }
 
@@ -233,15 +234,10 @@ func (s *ZipfSample) Sample() error {
 	return s.query(query, s.values)
 }
 
-func NewZipfSample(fields []db.Field, schema, name, _ string, values [][]Getter, _ float64, tableSize int64) Sampler {
+func NewZipfSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, tableSize int64, fkCli *ForeignKeyLinks) Sampler {
 	s := &ZipfSample{}
-	s.table = name
-	s.schema = schema
-	s.limit = len(values)
-	s.values = values
-	s.fields = fields
-
-	s.zipfRand = rand.NewZipf(rand.New(rand.NewSource(time.Now().UnixNano())), 1.1, 1.0, uint64(tableSize))
+	s.Init(fields, schema, tablename, constraintName, values, tableSize, fkCli)
+	s.zipfRand = rand.NewZipf(rand.New(rand.NewSource(time.Now().UnixNano())), fkCli.ParetoS, fkCli.ParetoV, uint64(tableSize))
 
 	return s
 }

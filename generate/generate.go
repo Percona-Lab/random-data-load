@@ -35,8 +35,12 @@ type ForeignKeyLinks struct {
 	Binomial            map[string]string ` help:"Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). Format should be \"parent_table=child_table\" E.g: --${BinomialFlag}=\"customers=orders;orders=items\""`
 	Sequential          map[string]string `name:"sequential" help:"Defines a sequential foreign key links relationships, using SELECT ... LIMIT x OFFET y. Format should be \"parent_table=child_table\" E.g: --${SequentialFlag}=\"citizens=ssns\""`
 	CoinFlipPercent     float64           `name:"coin-flip-percent" help:"When used with ${BinomialFlag}, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --${SequentialFlag}. Lower value (e.g 0.001) will also slow down the sampling speed" default:"1"`
-	Normal              map[string]string `help:"Defines a 1-N foreign key relationships using box-muller transformation to provide normal distribution"`
-	Pareto              map[string]string `help:"Defines a 1-N foreign key relationships using zipf (pareto) distribution"`
+	Normal              map[string]string `help:"Defines a 1-N foreign key relationships using box-muller transformation to provide normal distribution. Slow method needing full table scans for each samples."`
+	NormalStddev        float64           `help:"Standard deviation to the normal law. Will default to 1/10 of the table size"`
+	NormalMean          float64           `help:"Mean of the normal law. Will default to the middle of the table, --rows/2"`
+	Pareto              map[string]string `help:"Defines a 1-N foreign key relationships using zipf (pareto) distribution. Slow method needing full table scans for each samples"`
+	ParetoS             float64           `help:"Zipf slope parameter. Must be above 1. Higher value will mean faster decay, so first rows will be hotter" default:"1.1"`
+	ParetoV             float64           `help:"Must be >=1. Directly map to V, https://pkg.go.dev/math/rand#Zipf." default:"1.0"`
 }
 
 const (
@@ -64,7 +68,7 @@ func (r ForeignKeyLinks) relationship(parent, child string) SamplerBuilder {
 		return fkLinkToSamplerCreator[NormalFlag]
 	}
 	if r.Pareto[parent] == child {
-		return fkLinkToSamplerCreator[NormalFlag]
+		return fkLinkToSamplerCreator[ParetoFlag]
 	}
 	return fkLinkToSamplerCreator[r.DefaultRelationship]
 }
@@ -368,7 +372,7 @@ func (in *Insert) sampleConstraints(constraints db.Constraints, values [][]Gette
 		}
 
 		samplerInit := in.fklinks.relationship(constraint.ReferencedTableName, in.table.Name)
-		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlice, in.fklinks.CoinFlipPercent, in.expectedTableSize)
+		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlice, in.expectedTableSize, &in.fklinks)
 		err = sampler.Sample()
 		if err != nil {
 			return errors.Wrap(err, "sampleFieldsTable")
