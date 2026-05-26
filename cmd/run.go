@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/apoorvam/goterminal"
 	"github.com/pkg/errors"
@@ -19,16 +20,18 @@ import (
 type RunCmd struct {
 	DB db.Config `embed:""`
 
-	Table        string           `help:"Table to insert to. When using --query, --table will be used to restrict the tables to insert to."`
-	Rows         int64            `name:"rows" required:"true" help:"Number of rows to insert"`
-	RowsPerTable map[string]int64 `name:"rows-per-table" help:"Number of rows to insert per-table. Will have priority over --rows. Format is \"{table}=X\"" default:""`
-	BulkSize     int64            `name:"bulk-size" help:"Number of rows per insert statement" default:"1000"`
-	DryRun       bool             `name:"dry-run" help:"Print queries to the standard output instead of inserting them into the db"`
-	Quiet        bool             `name:"quiet" help:"Do not print progress bar"`
-	WorkersCount int              `name:"workers" help:"How many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time" default:"3"`
-	MaxTextSize  int64            `help:"Limit the maximum size of long text, varchar and blob fields." default:"65535"`
-	UUIDVersion  int              `name:"uuid-version" help:"UUID v4 or v7 for uuid datatypes" default:"4" enum:"4,7"`
-	Query        string           `help:"Providing a query will enable to automatically discover the schema, insert recursively into tables, enforce implicit joins."`
+	Table            string           `help:"Table to insert to. When using --query, --table will be used to restrict the tables to insert to."`
+	Rows             int64            `name:"rows" required:"true" help:"Number of rows to insert"`
+	RowsPerTable     map[string]int64 `name:"rows-per-table" help:"Number of rows to insert per-table. Will have priority over --rows. Format is \"{table}=X\"" default:""`
+	BulkSize         int64            `name:"bulk-size" help:"Number of rows per insert statement" default:"1000"`
+	DryRun           bool             `name:"dry-run" help:"Print queries to the standard output instead of inserting them into the db"`
+	Quiet            bool             `name:"quiet" help:"Do not print progress bar"`
+	WorkersCount     int              `name:"workers" help:"How many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time" default:"3"`
+	MaxTextSize      int64            `help:"Limit the maximum size of long text, varchar and blob fields." default:"65535"`
+	UUIDVersion      int              `name:"uuid-version" help:"UUID v4 or v7 for uuid datatypes" default:"4" enum:"4,7"`
+	MinGeneratedTime time.Time        `help:"Generated timestamps will be after this date. Format is RFC3339. Will default to --max-generated-time - 1 year"`
+	MaxGeneratedTime time.Time        `help:"Generated timestamps will be before this date. Format is RFC3339. Will default to now()"`
+	Query            string           `help:"Providing a query will enable to automatically discover the schema, insert recursively into tables, enforce implicit joins."`
 
 	generate.ForeignKeyLinks
 	AddForeignKeys  query.VirtualJoins                      `name:"add-fk" help:"Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk=\"parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]\". Example: --add-fk=\"customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id\""`
@@ -47,6 +50,13 @@ func (cmd *RunCmd) Run() error {
 	_, err := db.Connect(cmd.DB)
 	if err != nil {
 		return err
+	}
+
+	if cmd.MaxGeneratedTime.IsZero() {
+		cmd.MaxGeneratedTime = time.Now()
+	}
+	if cmd.MinGeneratedTime.IsZero() {
+		cmd.MinGeneratedTime = cmd.MaxGeneratedTime.Add(-1 * time.Duration(24*365) * time.Hour)
 	}
 
 	if (cmd.DefaultRelationship == generate.BinomialFlag || len(cmd.Binomial) > 0) && (float64(cmd.Rows)*cmd.CoinFlipPercent) < (float64(cmd.BulkSize)/2) {
@@ -163,7 +173,7 @@ func (cmd *RunCmd) Run() error {
 func (cmd *RunCmd) run(table *db.Table) error {
 	rows := valueForTable(cmd.Rows, cmd.RowsPerTable, table.Name)
 	colNullFreqs := frequency.SharedTableFrequency[table.Name]
-	ins := generate.New(table, cmd.ForeignKeyLinks, cmd.WorkersCount, cmd.MaxTextSize, cmd.UUIDVersion, colNullFreqs)
+	ins := generate.New(table, cmd.ForeignKeyLinks, cmd.WorkersCount, cmd.MaxTextSize, cmd.UUIDVersion, colNullFreqs, &cmd.MinGeneratedTime, &cmd.MaxGeneratedTime)
 
 	if !cmd.Quiet && !cmd.DryRun {
 		go startProgressBar(table.Name, rows, ins.NotifyChan)

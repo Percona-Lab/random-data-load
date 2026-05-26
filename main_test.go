@@ -169,6 +169,13 @@ func TestRun(t *testing.T) {
 		},
 
 		{
+			name:       "timestamp",
+			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN c1 between '2015-07-02' and '2020-09-08' THEN 1 ELSE 0 END) = 100) from t1;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1", "--min-generated-time=2015-07-02T00:00:00Z", "--max-generated-time=2020-09-08T00:00:00Z", "--null-freq=0"}},
+		},
+
+		{
 			name:       "fk_uniform",
 			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
 			engines:    []string{"pg", "mysql"},

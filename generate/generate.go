@@ -28,6 +28,8 @@ type Insert struct {
 	maxRetries        int
 	frequencies       frequency.ColumnFrequency
 	expectedTableSize int64
+	minGeneratedTime  *time.Time
+	maxGeneratedTime  *time.Time
 }
 
 type ForeignKeyLinks struct {
@@ -88,17 +90,20 @@ var (
 )
 
 // New returns a new Insert instance.
-func New(table *db.Table, fklinks ForeignKeyLinks, workersCount int, maxTextSize int64, uuidVersion int, freqs frequency.ColumnFrequency) *Insert {
+func New(table *db.Table, fklinks ForeignKeyLinks, workersCount int, maxTextSize int64, uuidVersion int, freqs frequency.ColumnFrequency, minTime, maxTime *time.Time) *Insert {
 	in := &Insert{
-		table:        table,
-		writer:       os.Stdout,
-		fklinks:      fklinks,
-		workersCount: workersCount,
-		maxTextSize:  maxTextSize,
-		uuidVersion:  uuidVersion,
-		maxRetries:   5,
-		frequencies:  freqs,
+		table:            table,
+		writer:           os.Stdout,
+		fklinks:          fklinks,
+		workersCount:     workersCount,
+		maxTextSize:      maxTextSize,
+		uuidVersion:      uuidVersion,
+		maxRetries:       5,
+		frequencies:      freqs,
+		minGeneratedTime: minTime,
+		maxGeneratedTime: maxTime,
 	}
+
 	in.NotifyChan = make(chan int64)
 	return in
 }
@@ -329,10 +334,8 @@ func (in *Insert) generateFieldsRow(fields []db.Field, insertValues []Getter) {
 			gw.Assign(NewRandomInt(maxValue))
 		case "float", "decimal", "double", "numeric":
 			gw.Assign(NewRandomDecimal(field.NumericPrecision.Int64, field.NumericScale.Int64))
-		case "date":
-			gw.Assign(NewRandomDate())
-		case "datetime", "timestamp":
-			gw.Assign(NewRandomDateTime())
+		case "date", "datetime", "timestamp":
+			gw.Assign(NewRandomDate(in.minGeneratedTime, in.maxGeneratedTime))
 		case "time":
 			gw.Assign(NewRandomTime())
 		case "uuid":
@@ -345,7 +348,7 @@ func (in *Insert) generateFieldsRow(fields []db.Field, insertValues []Getter) {
 			gw.Assign(NewRandomString(field.ColumnName, maxSize))
 		case "year":
 			// TODO: meh.
-			gw.Assign(NewRandomIntRange(int64(time.Now().Year()-5), int64(time.Now().Year())))
+			gw.Assign(NewRandomIntRange(int64(in.minGeneratedTime.Year()), int64(in.maxGeneratedTime.Year())))
 		case "enum", "set":
 			gw.Assign(NewRandomEnum(field.SetEnumVals))
 		case "binary", "varbinary":

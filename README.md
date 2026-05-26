@@ -27,9 +27,9 @@ This is early stage
 |double|0 ~ 1000|
 |char(n)|up to n random chars|
 |varchar(n)|up to n random chars|
-|date|NOW() - 1 year ~ NOW()|
-|datetime|NOW() - 1 year ~ NOW()|
-|timestamp|NOW() - 1 year ~ NOW()|
+|date|between --min-generated-time and --max-generated-time|
+|datetime|between --min-generated-time and --max-generated-time|
+|timestamp|between --min-generated-time and --max-generated-time|
 |time|00:00:00 ~ 23:59:59|
 |year|Current year - 1 ~ current year|
 |tinyblob|up to 100 chars random paragraph|
@@ -49,6 +49,9 @@ Valuable types currently not implemented:
 - Vectors
 
 ## Options
+
+Common options:
+
 |Option|Description|
 |------|-----------|
 |--engine|mysql/pg|
@@ -56,11 +59,28 @@ Valuable types currently not implemented:
 |--user|Username|
 |--password|Password|
 |--port|Port number|
+|--quiet|Do not print progress bar|
+|--dry-run|Print queries to the standard output instead of inserting them into the db|
+|--debug|Show some debug information|
+|--pprof|Generate pprof trace at --cpu-prof-path. Also opens port 6060 for pprof go tool|
+|--version|Show version and exit|
 |--rows-per-table|Number of rows to insert per-table. Will have priority over --rows|
 |--bulk-size|Number of rows per INSERT statement (Default: 1000)|
 |--workers|how many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time (Default: 3)|
 |--table|Table to insert to. When using --query, --table will be used to restrict the tables to insert to.|
 |--query|Providing a query will analyze its schema usage, insert recursively into tables, and identify implicit joins|
+|--no-skip-fields|Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found.|
+|--null-freq|Define how frequent nullable fields should be NULL|
+|--null-freq-map|Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=73;t1.c2=4\" to set 73% or 4% of NULL for respective columns|
+|--values-freq-map|Inject arbitrary values at fixed frequencies. The format is "--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99" so that val1 will be on 75% of rows and val2 on 23% for column c1|
+|--min-generated-time|Generated timestamps will be after this date. Format is RFC3339. Will default to --max-generated-time - 1 year|
+|--max-generated-time|Generated timestamps will be before this date. Format is RFC3339. Will default to now()|
+
+Foreign key sampling options:
+|Option|Description|
+|------|-----------|
+|--add-fk|Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk="parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]". Example: --add-fk="customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id"|
+|--no-fk-guess|Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-foreign-keys.|
 |--default-relationship|Will define the default foreign-key relationship to apply. Possible values: binomial,sequential. The default relation can be overriden with other parameters --binomial or --sequential|
 |--binomial|Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). Format should be "parent_table=child_table". E.g: --binomial="customers=orders;orders=items"|
 |--coin-flip-percent|When used with --binomial, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --sequential (Default: 1)|
@@ -71,17 +91,6 @@ Valuable types currently not implemented:
 |--pareto|Defines a 1-N foreign key relationships using zipf (pareto) distribution. Slow method needing full table scans for each samples|
 |--pareto-s|Zipf slope parameter. Must be above 1. Higher value will mean faster decay, so first rows will be hotter|
 |--pareto-v|Must be >=1. Directly map to V, https://pkg.go.dev/math/rand#Zipf.|
-|--add-fk|Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk="parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]". Example: --add-fk="customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id"|
-|--no-fk-guess|Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-foreign-keys.|
-|--no-skip-fields|Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found.|
-|--null-freq|Define how frequent nullable fields should be NULL|
-|--null-freq-map|Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=73;t1.c2=4\" to set 73% or 4% of NULL for respective columns|
-|--values-freq-map|Inject arbitrary values at fixed frequencies. The format is "--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99" so that val1 will be on 75% of rows and val2 on 23% for column c1|
-|--quiet|Do not print progress bar|
-|--dry-run|Print queries to the standard output instead of inserting them into the db|
-|--debug|Show some debug information|
-|--pprof|Generate pprof trace at --cpu-prof-path. Also opens port 6060 for pprof go tool|
-|--version|Show version and exit|
 
 ## Foreign keys support
 If a field has Foreign Keys constraints, `random-data-load` will get samples from the referenced tables in order to insert valid values for the field.  
@@ -329,72 +338,6 @@ postgres=# select oi.product_no, count(*) from order_items oi group by 1 order b
 
 ```
 
-
-## Options
-|Option|Description|
-|------|-----------|
-|--engine|mysql/pg|
-|--host|Host name/ip|
-|--user|Username|
-|--password|Password|
-|--port|Port number|
-|--bulk-size|Number of rows per INSERT statement (Default: 1000)|
-|--workers|how many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time (Default: 3)|
-|--table|Table to insert to. When using --query, --table will be used to restrict the tables to insert to.|
-|--query|Providing a query will analyze its schema usage, insert recursively into tables, and identify implicit joins|
-|--default-relationship|Will define the default foreign-key relationship to apply. Possible values: binomial,sequential. The default relation can be overriden with other parameters --binomial or --sequential|
-|--binomial|Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). Format should be "parent_table=child_table". E.g: --binomial="customers=orders;orders=items"|
-|--coin-flip-percent|When used with --binomial, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --sequential (Default: 1)|
-|--sequential|Defines a sequential foreign key links relationships. Format should be "parent_table=child_table". E.g: --sequential="citizens=ssns"|
-|--add-foreign-keys|Add foreign keys, if they are not explicitely created in the table schema. The format must be parent_table.col1=child_table.col2. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Example --add-foreign-keys="customers.id=purchases.customer_id;purchases.id=items.purchase_id"|
-|--no-fk-guess|Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-foreign-keys.|
-|--no-skip-fields|Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found.|
-|--null-freq|Define how frequent nullable fields should be NULL by default|
-|--values-freq-map|Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is "--null-freq-map=t1.c1=73;t1.c2=4" to set 73%% or 4%% of NULL for respective columns
-|--query-param-freq|Frequency at which to insert arbitrary values guessed from the query parameters. = and IN operators are handled. Can be disabled when set to 0.0.|
-|--quiet|Do not print progress bar|
-|--dry-run|Print queries to the standard output instead of inserting them into the db|
-|--debug|Show some debug information|
-|--pprof|Generate pprof trace at --cpu-prof-path. Also opens port 6060 for pprof go tool|
-|--version|Show version and exit|
-
-
-## Supported fields:
-|Field type|Generated values|
-|----------|----------------|
-|bool|false ~ true|
-|tinyint|0 ~ 0xFF|
-|smallint|0 ~ 0XFFFF|
-|mediumint|0 ~ 0xFFFFFF|
-|int - integer|0 ~ 0xFFFFFFFF|
-|bigint|0 ~ 0xFFFFFFFFFFFFFFFF|
-|float|0 ~ 1e8|
-|decimal(m,n)|0 ~ 10^(m-n)|
-|double|0 ~ 1000|
-|char(n)|up to n random chars|
-|varchar(n)|up to n random chars|
-|date|NOW() - 1 year ~ NOW()|
-|datetime|NOW() - 1 year ~ NOW()|
-|timestamp|NOW() - 1 year ~ NOW()|
-|time|00:00:00 ~ 23:59:59|
-|year|Current year - 1 ~ current year|
-|tinyblob|up to 100 chars random paragraph|
-|tinytext|up to 100 chars random paragraph|
-|blob|up to --max-text-size chars random paragraph|
-|text|up to --max-text-size chars random paragraph|
-|mediumblob|up to --max-text-size chars random paragraph|
-|mediumtext|up to --max-text-size chars random paragraph|
-|longblob|up to --max-text-size chars random paragraph|
-|longtext|up to --max-text-size chars random paragraph|
-|enum|A random item from the valid items list|
-|set|A random item from the valid items list|
-
-Valuable types currently not implemented:
-- JSONs
-- Geospatial
-- Vectors
-
-
 ## Foreign keys support
 If a field has Foreign Keys constraints, `random-data-load` will get samples from the referenced tables in order to insert valid values for the field.  
 To enforce orders, an arbitrary 'ORDER BY 1' is made. This is so that --sequential can create 1-1 relationship, and to better master the eventual distribution of --binomial.
@@ -481,7 +424,7 @@ https://github.com/Percona-Lab/random-data-load/releases
 
 ## To do
 General:
-- [ ] better datetime random generation. It should be flexible over its range
+- [x] better datetime random generation. It should be flexible over its range
 - [x] use more gofakeit generators with regexes to generate "legit" data when possible
 - [ ] helpers to get schema (generate pgdump/mysqldump commands, get index stats, ...)
 - [x] protect against foreign key cycles. Both explicits and implicits (avoid generating implicits that would end up causing loops)
@@ -498,6 +441,7 @@ Stepping stones to fully reproduce cardinalities:
 - [x] table-per-table override for --rows, --null-frequency
 - [ ] coin-flip-percent per relationship basis. Current thought: adding it to --binomial this way --binomial="parent=child:70" to set the coinflip to 70 for this link
 - [ ] parse col/index stats (cardinality + most_common_elems + most_common_freqs for postgres, cardinalities for MySQL)
+- [ ] estimate/decide sampling method+tuning based on stats
 
 Without clear plan:
 - [x] More random algorithms (as of now, no good implementations has been found for pareto that wouldn't provoke huge runtime and/or huge memory consumption, unless implemented fields are restricted to integers)
