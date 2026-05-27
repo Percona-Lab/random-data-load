@@ -15,6 +15,9 @@ type MySQL struct{}
 
 func (_ MySQL) Connect(dbInfo Config) (*sql.DB, error) {
 	netType := "tcp"
+	if dbInfo.Port == 0 {
+		dbInfo.Port = 3306
+	}
 	address := net.JoinHostPort(dbInfo.Host, fmt.Sprintf("%d", dbInfo.Port))
 
 	if dbInfo.Host == "localhost" {
