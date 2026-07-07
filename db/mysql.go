@@ -41,43 +41,23 @@ func (_ MySQL) Connect(dbInfo Config) (*sql.DB, error) {
 	return sql.Open("mysql", cfg.FormatDSN())
 }
 
-// indexField holds raw index information as defined in INFORMATION_SCHEMA table
-type mySQLIndexField struct {
-	KeyName     string
-	SeqInIndex  int
-	ColumnName  string
-	Collation   sql.NullString
-	Cardinality sql.NullInt64
-	//SubPart      sql.NullInt64
-	//Packed       sql.NullString
-	Null         string
-	IndexType    string
-	Comment      string
-	IndexComment string
-	NonUnique    bool
-	//Visible      string // MySQL 8.0+
-	//Expression   sql.NullString // MySQL 8.0.16+
-	//Clustered string // TiDB Support
-}
-
 func (mysql MySQL) GetFields(schema, tablename string) ([]Field, error) {
-	selectValues := []string{
-		"COLUMN_NAME",
-		"IS_NULLABLE = 'YES'",
-		"DATA_TYPE",
-		"CHARACTER_MAXIMUM_LENGTH",
-		"NUMERIC_PRECISION",
-		"NUMERIC_SCALE",
-		"COLUMN_TYPE",
-		"COLUMN_KEY",
-		"extra like '%auto_increment%'",
-		"COLUMN_DEFAULT IS NOT NULL",
-	}
 
-	query := "SELECT " + strings.Join(selectValues, ",") +
-		" FROM `information_schema`.`COLUMNS` " +
-		"WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? " +
-		"ORDER BY ORDINAL_POSITION"
+	query := `SELECT 
+		COLUMN_NAME,
+		IS_NULLABLE = 'YES',
+		DATA_TYPE,
+		CHARACTER_MAXIMUM_LENGTH,
+		NUMERIC_PRECISION,
+		NUMERIC_SCALE,
+		COLUMN_TYPE,
+		COLUMN_KEY,
+		extra like '%auto_increment%',
+		COLUMN_DEFAULT IS NOT NULL,
+		extra like '%VIRTUAL%'
+	FROM information_schema.COLUMNS
+	WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? 
+	ORDER BY ORDINAL_POSITION`
 
 	rows, err := DB.Query(query, schema, tablename)
 	if err != nil {
@@ -154,6 +134,7 @@ func (_ MySQL) makeScanRecipients(f *Field, columnType *string, cols []string) [
 		&f.ColumnKey,
 		&f.AutoIncrement,
 		&f.HasDefaultValue,
+		&f.IsGenerated,
 	}
 
 	return fields

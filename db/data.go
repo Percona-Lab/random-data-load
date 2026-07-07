@@ -32,6 +32,7 @@ type Field struct {
 	SetEnumVals            []string
 	HasDefaultValue        bool
 	Skip                   bool
+	IsGenerated            bool
 }
 
 func isSupportedType(fieldType string) bool {
@@ -141,7 +142,7 @@ func (t *Table) FieldsToInsertAsDefault() []Field {
 	}
 
 	for _, field := range t.Fields {
-		if !field.IsNullable && field.ColumnKey == "PRI" && field.AutoIncrement {
+		if (!field.IsNullable && field.ColumnKey == "PRI" && field.AutoIncrement) || field.IsGenerated {
 			fields = append(fields, field)
 		}
 	}
@@ -159,6 +160,9 @@ func (t *Table) FieldsToGenerate() []Field {
 			continue
 		}
 		if !field.IsNullable && field.ColumnKey == "PRI" && field.AutoIncrement {
+			continue
+		}
+		if field.IsGenerated {
 			continue
 		}
 		if t.IsFieldInAnyConstraints(field) {

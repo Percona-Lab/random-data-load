@@ -1,0 +1,4 @@
+CREATE TABLE t1 (
+	id integer primary key,
+	v integer generated always as (id) virtual 
+);

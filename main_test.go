@@ -393,6 +393,13 @@ func TestRun(t *testing.T) {
 			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=1000", "--table=t1", "--default-relationship=sequential"}},
 		},
+
+		{
+			name:       "virtual_col",
+			checkQuery: "select count(*) = 100 from t1 where id = v",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
 	}
 
 	for _, test := range tests {

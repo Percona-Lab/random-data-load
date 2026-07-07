@@ -38,7 +38,8 @@ func (postgres Postgres) GetFields(schema, tablename string) ([]Field, error) {
 		numeric_scale, 
 		CASE WHEN is_identity='YES' THEN 'PRI' else '' END,
 		CASE WHEN identity_generation='ALWAYS' THEN true else false END,
-		column_default is not null
+		column_default is not null,
+		CASE WHEN is_generated='ALWAYS' THEN true ELSE false END
 	FROM information_schema.columns
 	WHERE table_schema=$1 AND table_name=$2`
 
@@ -94,6 +95,7 @@ func (_ Postgres) makeScanRecipients(f *Field, columnType *string, cols []string
 		&f.ColumnKey,
 		&f.AutoIncrement,
 		&f.HasDefaultValue,
+		&f.IsGenerated,
 	}
 
 	return fields
