@@ -151,6 +151,13 @@ func (_ Postgres) Escape(s string) string {
 	return "\"" + s + "\""
 }
 
+// EscapeValue doubles single quotes. With standard_conforming_strings on, the
+// default since 9.1, a backslash carries no special meaning and must be left
+// alone.
+func (_ Postgres) EscapeValue(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
+}
+
 func (_ Postgres) SetTableMetadata(table *Table, database, tablename string) {
 	// database is useless for catalogs, it's only used for connection on pg
 	schema := "public"

@@ -41,6 +41,7 @@ type RunCmd struct {
 	NullFreqMap     frequency.FrequencyNullParameter        `name:"null-freq-map" help:"Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=73;t1.c2=4\" to set 73%% or 4%% of NULL for respective columns" default:""`
 	ValuesFreqMap   frequency.FrequencyIndexValuesParameter `name:"values-freq-map" help:"Inject arbitrary values at fixed frequencies. The format is \"--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99\" so that val1 will be on 75%% of rows and val2 on 23%% for column c1" default:""` // TODO we're not checking if the total freq is above 1
 	QueryParamsFreq float64                                 `name:"query-param-freq" help:"Frequency at which to insert arbitrary values guessed from the query parameters. = and IN operators are handled. Can be disabled when set to 0.0." default:"0.1"`
+	StatFile        string                                  `name:"stat-file" help:"Scan a column statistics export and reuse its null_frac, most_common_vals and most_common_freqs as --null-freq-map and --values-freq-map. Use the \"export-stat\" subcommand to get the command producing that file." type:"path"`
 }
 
 // Run starts inserting data.
@@ -118,6 +119,17 @@ func (cmd *RunCmd) Run() error {
 
 		tables = append(tables, table)
 	}
+	if cmd.StatFile != "" {
+		// After the tables are loaded, so that an exported column can be
+		// matched against the real one: the catalog reports folded names, and
+		// both the frequency map and the generator are keyed on the names it
+		// gave back.
+		if err := cmd.mergeStats(tables); err != nil {
+			return err
+		}
+		log.Debug().Interface("freq-map", frequency.SharedTableFrequency).Msg("merged exported statistics into frequency map")
+	}
+
 	// now we have the full table list, we check for any loops
 	for _, table := range tables {
 		copiedTable, err := table.IdentifyAndResolveSelfReferencingConstraintLoop()
@@ -168,6 +180,33 @@ func (cmd *RunCmd) Run() error {
 	}
 
 	return err
+}
+
+// mergeStats reuses the statistics the database already collected on a
+// populated table to set the null and value frequencies for this run.
+func (cmd *RunCmd) mergeStats(tables []*db.Table) error {
+	stats, err := frequency.LoadStats(cmd.StatFile)
+	if err != nil {
+		return err
+	}
+
+	frequency.MergeStats(stats, func(cs frequency.ColumnStats) (string, string, bool) {
+		for _, table := range tables {
+			if !strings.EqualFold(table.Name, cs.Tablename) {
+				continue
+			}
+			if cs.Schemaname != "" && table.Schema != "" && !strings.EqualFold(table.Schema, cs.Schemaname) {
+				continue
+			}
+			field := table.FieldByName(cs.Attname)
+			if field == nil {
+				return "", "", false
+			}
+			return table.Name, field.ColumnName, true
+		}
+		return "", "", false
+	})
+	return nil
 }
 
 func (cmd *RunCmd) run(table *db.Table) error {

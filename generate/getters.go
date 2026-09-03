@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"time"
 
+	"github.com/ylacancellera/random-data-load/db"
 	"github.com/ylacancellera/random-data-load/frequency"
 )
 
@@ -63,7 +64,10 @@ func NewGetterWrapper(column string, isNullable bool, freq frequency.ColumnFrequ
 	}
 	value, ok := freq.InjectIndexValue(column)
 	if ok {
-		wrapper.Elem = &RandomString{value: value}
+		// These values are not generated, they are copied verbatim from a
+		// query, a --values-freq-map or a pg_stats dump, so they can carry
+		// anything the source column held.
+		wrapper.Elem = &RandomString{value: db.EscapeValue(value)}
 	}
 
 	return &wrapper

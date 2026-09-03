@@ -117,6 +117,7 @@ Common options:
 |--null-freq|Define how frequent nullable fields should be NULL|
 |--null-freq-map|Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=73;t1.c2=4\" to set 73% or 4% of NULL for respective columns|
 |--values-freq-map|Inject arbitrary values at fixed frequencies. The format is "--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99" so that val1 will be on 75% of rows and val2 on 23% for column c1|
+|--stat-file|Scan a column statistics export and reuse its null_frac, most_common_vals and most_common_freqs instead of setting --null-freq-map and --values-freq-map by hand. Use the `export-stat` subcommand to get the command producing that file|
 |--min-generated-time|Generated timestamps will be after this date. Format is RFC3339. Will default to --max-generated-time - 1 year|
 |--max-generated-time|Generated timestamps will be before this date. Format is RFC3339. Will default to now()|
 
@@ -338,6 +339,70 @@ It will not guess a foreign key for:
 
 Conditions on either side of an OR are kept as separate single-column keys, never merged into a composite one: only one of them has to hold, so merging would demand more of the data than the query does.
 
+## Reusing the data distribution of a real database
+
+Setting `--null-freq-map` and `--values-freq-map` by hand means knowing the shape of
+the production data in the first place. Postgres already measured it: `pg_stats` holds
+a `null_frac`, a `most_common_vals` and a `most_common_freqs` for every analyzed
+column, and those three are exactly what the two options take.
+
+`export-stat` prints the command that dumps them. It reads nothing but `pg_stats`,
+so it is safe to hand over to whoever has access to the database being copied:
+
+```
+random-data-load export-stat --engine=pg --query="select o.total from customers c join orders o on c.id = o.customer_id" --database=shop
+```
+
+```
+# Reads pg_stats and writes nothing. Run it on the database whose data
+# distribution you want to reproduce, then pass the file to:
+#   random-data-load run --stat-file=pg_stats.json ...
+psql -X -q -A -t -d shop -f - > pg_stats.json <<'SQL'
+SELECT coalesce(json_agg(s), '[]'::json)
+  FROM (SELECT schemaname, tablename, attname, null_frac,
+               (most_common_vals::text::text[]) AS most_common_vals,
+               most_common_freqs
+          FROM pg_stats
+         WHERE schemaname = 'public'
+           AND lower(tablename) IN ('customers', 'orders')
+           AND lower(attname) IN ('c', 'customer_id', 'customers', 'id', 'o', 'orders', 'total')) s;
+SQL
+```
+
+The dump is narrowed down to the tables and columns the `--query` uses, the same
+whitelist that decides which fields get generated. Without a `--query`, or with one
+selecting a `*`, it covers every column of the tables instead. `--max-common-vals`
+caps how many common values each column contributes, since postgres stores up to
+`default_statistics_target` of them.
+
+Feeding it back needs nothing else, `--table` or `--query` aside:
+
+```
+random-data-load run --engine=pg --database=shop --query="..." --rows=100000 --stat-file=pg_stats.json
+```
+
+A few things worth knowing:
+
+- **the dump only carries statistics, never a row**. `most_common_vals` does hold real
+  column values, though, so it is production data and should be treated as such
+- values are matched to a table and a column of the run, case-insensitively. Anything
+  the run does not insert into is ignored
+- `--null-freq-map`, `--values-freq-map` and the literals taken from `--query` win.
+  A value they already give a frequency to keeps it, and is not counted twice
+- a column postgres recorded no NULL for gets none, rather than falling back to
+  `--null-freq`
+- `null_frac` is scaled up before use. A row is drawn as NULL first and then
+  overwritten when a common value is drawn, so a column whose values cover 60% of its
+  rows only keeps its NULLs on the other 40%. What ends up in the generated table is
+  the `null_frac` that was measured
+- frequencies that add up to more than 1 are warned about, and NULL then takes
+  whatever share is left
+
+`--engine=mysql` is refused for now rather than exporting something unusable:
+`information_schema.COLUMN_STATISTICS` only holds histograms, and only for the
+columns someone explicitly ran `ANALYZE TABLE ... UPDATE HISTOGRAM ON` against. On
+MySQL, set the frequencies by hand with `--null-freq-map` and `--values-freq-map`.
+
 ## Skipping fields that are not relevant to the query
 When using --query, `random-data-load` will avoid generating or sampling fields that are not necessary for the query to run.
 It can be disabled with --no-skip-fields.
@@ -455,6 +520,10 @@ Without clear plan:
 - fixed a crash on schema-qualified columns in a JOIN condition, e.g. `ON public.orders.order_id = oi.order_id`
 - fixed a query-guessed foreign key being added a second time when the schema already declared it as part of a composite key, which produced an INSERT listing a column twice
 - columns read only inside a CTE are no longer left out of the generated fields
+- `run --stat-file` reads a column statistics export and sets the null and value frequencies from `null_frac`, `most_common_vals` and `most_common_freqs`
+- new `export-stat` subcommand, printing the command that exports those statistics for the tables and columns a `--query` uses. Only `--engine=pg` for now
+- injected values are now escaped before reaching the INSERT, so a value holding a quote no longer breaks the statement
+- `--query-param-freq=0` no longer registers the query literals at a frequency of zero, it now leaves them out entirely
 
 #### 0.2.3
 - NULL and/or fixed values can be injected at tunable rates

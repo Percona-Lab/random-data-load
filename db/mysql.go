@@ -191,6 +191,13 @@ func (_ MySQL) Escape(s string) string {
 	return "`" + s + "`"
 }
 
+// EscapeValue doubles single quotes, and backslashes too: unlike postgres,
+// mysql reads a backslash as an escape character inside a string literal
+// unless NO_BACKSLASH_ESCAPES is set.
+func (_ MySQL) EscapeValue(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\\", "\\\\"), "'", "''")
+}
+
 func (_ MySQL) SetTableMetadata(table *Table, database, tablename string) {
 	table.Schema = database
 	table.Name = tablename

@@ -22,6 +22,11 @@ type Frequency struct {
 	Null             float64
 	IndexValues      []string  // list of values that should  end up in the column
 	IndexFrequencies []float64 // with their associated frequencies
+
+	// Set when the entry came from a command line flag rather than from a
+	// scanned pg_stats dump, so that an explicit flag is never overwritten by
+	// what the dump happens to say.
+	nullFromFlag bool
 }
 
 type FrequencyNullParameter TableFrequency
@@ -66,9 +71,10 @@ func (fnp *FrequencyNullParameter) Decode(ctx *kong.DecodeContext, target reflec
 		if colMap, ok = SharedTableFrequency[tableColParts[0]]; !ok {
 			colMap = map[string]Frequency{}
 		}
-		colMap[tableColParts[1]] = Frequency{
-			Null: freq,
-		}
+		storedFreq := colMap[tableColParts[1]]
+		storedFreq.Null = freq
+		storedFreq.nullFromFlag = true
+		colMap[tableColParts[1]] = storedFreq
 		SharedTableFrequency[tableColParts[0]] = colMap
 	}
 
@@ -171,6 +177,12 @@ func (c ColumnFrequency) InjectIndexValue(col string) (string, bool) {
 }
 
 func MergeQueryParameters(params map[string][]string, defaultFrequency float64) {
+	// --query-param-freq=0 disables the whole thing. Registering the literals
+	// with a frequency of zero would never insert them, but it would still
+	// claim them, and anything merged afterwards would leave them alone.
+	if defaultFrequency <= 0 {
+		return
+	}
 	for tableCol, values := range params {
 		parts := strings.Split(tableCol, ".")
 		if len(parts) != 2 {

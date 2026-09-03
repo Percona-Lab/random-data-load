@@ -25,6 +25,7 @@ type Engine interface {
 	GetConstraints(string, string) ([]*Constraint, error)
 	InsertTemplate() string
 	Escape(string) string
+	EscapeValue(string) string
 	SetTableMetadata(*Table, string, string)
 	BinomialWhereClause(float64) string
 	ErrShouldRetryTx(error) bool
@@ -70,6 +71,16 @@ func InsertTemplate() string {
 
 func Escape(s string) string {
 	return engine.Escape(s)
+}
+
+// EscapeValue makes a string safe to paste between the single quotes of a
+// literal. Values coming from a query, a --values-freq-map or a pg_stats dump
+// are arbitrary production data, so they routinely contain quotes.
+func EscapeValue(s string) string {
+	if engine == nil {
+		return s
+	}
+	return engine.EscapeValue(s)
 }
 
 func BinomialWhereClause(freqPercent float64) string {

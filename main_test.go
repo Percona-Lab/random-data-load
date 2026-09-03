@@ -448,6 +448,28 @@ func TestRun(t *testing.T) {
 			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
+
+		{
+			// tests/pg/pg_stats.json is a dump as a real postgres would have
+			// returned it: c1 seen with 60.5% of 42, 14.9% of 7 and 9.8% of
+			// nulls, c2 with 30.2% of 'pg', 24.8% of a value holding a quote
+			// and 24.9% of nulls, and c3 with no common value and no null at
+			// all. Regenerating has to land back on those shares, c3 included:
+			// a column postgres saw no null in must not fall back to
+			// --null-freq.
+			name: "pg_stats",
+			checkQuery: `select (count(*) = 100000)
+				AND (sum(CASE WHEN c1 = 42 THEN 1 ELSE 0 END) between 58500 and 62500)
+				AND (sum(CASE WHEN c1 = 7 THEN 1 ELSE 0 END) between 13000 and 17000)
+				AND (sum(CASE WHEN c1 IS NULL THEN 1 ELSE 0 END) between 8000 and 12000)
+				AND (sum(CASE WHEN c2 = 'pg' THEN 1 ELSE 0 END) between 28200 and 32200)
+				AND (sum(CASE WHEN c2 = 'it''s quoted' THEN 1 ELSE 0 END) between 22800 and 26800)
+				AND (sum(CASE WHEN c2 IS NULL THEN 1 ELSE 0 END) between 22900 and 26900)
+				AND (sum(CASE WHEN c3 IS NULL THEN 1 ELSE 0 END) = 0)
+				from t1;`,
+			engines: []string{"pg"},
+			cmds:    [][]string{[]string{"--rows=100000", "--table=t1", "--stat-file=tests/pg/pg_stats.json"}},
+		},
 	}
 
 	for _, test := range tests {

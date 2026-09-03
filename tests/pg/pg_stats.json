@@ -1,0 +1,3 @@
+[{"schemaname":"public","tablename":"t1","attname":"c1","null_frac":0.098466665,"most_common_vals":["42","7"],"most_common_freqs":[0.60466665,0.14913334]}, 
+ {"schemaname":"public","tablename":"t1","attname":"c2","null_frac":0.2489,"most_common_vals":["pg","it's quoted"],"most_common_freqs":[0.30193333,0.24756667]}, 
+ {"schemaname":"public","tablename":"t1","attname":"c3","null_frac":0,"most_common_vals":null,"most_common_freqs":null}]
