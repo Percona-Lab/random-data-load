@@ -140,14 +140,22 @@ func (_ MySQL) makeScanRecipients(f *Field, columnType *string, cols []string) [
 	return fields
 }
 func (_ MySQL) GetConstraints(schema, tableName string) ([]*Constraint, error) {
+	// A constraint is only identified by its name together with the table
+	// holding it: names are unique within a schema, but the same name is
+	// expected to come back in every schema holding a copy of that table, so
+	// matching on the name alone aggregates the columns of every namesake and
+	// lists them all under this table's constraint.
 	query := `SELECT tc.CONSTRAINT_NAME,
 			kcu.REFERENCED_TABLE_SCHEMA,
 			kcu.REFERENCED_TABLE_NAME,
-			group_concat(kcu.COLUMN_NAME ORDER BY ordinal_position SEPARATOR ';'),
-			group_concat(kcu.REFERENCED_COLUMN_NAME ORDER BY ordinal_position SEPARATOR ';')
+			group_concat(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION SEPARATOR ';'),
+			group_concat(kcu.REFERENCED_COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION SEPARATOR ';')
 		FROM information_schema.TABLE_CONSTRAINTS tc
-		LEFT JOIN information_schema.KEY_COLUMN_USAGE kcu
-			ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+		JOIN information_schema.KEY_COLUMN_USAGE kcu
+			ON kcu.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
+			AND kcu.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+			AND kcu.TABLE_SCHEMA = tc.TABLE_SCHEMA
+			AND kcu.TABLE_NAME = tc.TABLE_NAME
 		JOIN information_schema.tables t
 			ON kcu.referenced_table_schema = t.table_schema
 			AND kcu.referenced_table_name = t.table_name

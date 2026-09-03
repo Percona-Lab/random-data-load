@@ -102,22 +102,39 @@ func (_ Postgres) makeScanRecipients(f *Field, columnType *string, cols []string
 }
 
 func (_ Postgres) GetConstraints(schema, tablename string) ([]*Constraint, error) {
+	// information_schema cannot tell two foreign keys sharing a name apart:
+	// their name only has to be unique within their own table, so every schema
+	// holding a copy of that table, and even a sibling table in this one,
+	// reports the same name. Joined on it, their columns pile up into a single
+	// constraint listing each column once per namesake. pg_constraint holds
+	// the columns of one key, paired up by position, and nothing else.
 	query := `
-SELECT c.constraint_name, 
-	y.table_schema as referenced_schema_name, 
-	y.table_name as referenced_table_name, 
-	string_agg(y.column_name, ';' ORDER BY x.ordinal_position) as referenced_column_names, 
-	string_agg(x.column_name, ';' ORDER BY x.ordinal_position) as column_names
-FROM information_schema.referential_constraints c
-JOIN information_schema.key_column_usage x
-	ON x.constraint_name = c.constraint_name
-JOIN information_schema.key_column_usage y
-    ON y.ordinal_position = x.position_in_unique_constraint
-    AND y.constraint_name = c.unique_constraint_name
-WHERE x.table_schema = $1 
-	AND x.table_name = $2
-GROUP BY 1,2,3
-ORDER BY c.constraint_name;
+SELECT con.conname,
+	refnamespace.nspname as referenced_schema_name,
+	refclass.relname as referenced_table_name,
+	string_agg(refattribute.attname, ';' ORDER BY cols.ord) as referenced_column_names,
+	string_agg(attribute.attname, ';' ORDER BY cols.ord) as column_names
+FROM pg_catalog.pg_constraint con
+JOIN pg_catalog.pg_class class
+	ON class.oid = con.conrelid
+JOIN pg_catalog.pg_namespace namespace
+	ON namespace.oid = class.relnamespace
+JOIN pg_catalog.pg_class refclass
+	ON refclass.oid = con.confrelid
+JOIN pg_catalog.pg_namespace refnamespace
+	ON refnamespace.oid = refclass.relnamespace
+CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS cols(attnum, refattnum, ord)
+JOIN pg_catalog.pg_attribute attribute
+	ON attribute.attrelid = con.conrelid
+	AND attribute.attnum = cols.attnum
+JOIN pg_catalog.pg_attribute refattribute
+	ON refattribute.attrelid = con.confrelid
+	AND refattribute.attnum = cols.refattnum
+WHERE con.contype = 'f'
+	AND namespace.nspname = $1
+	AND class.relname = $2
+GROUP BY con.oid, con.conname, refnamespace.nspname, refclass.relname
+ORDER BY con.conname;
 		`
 	rows, err := DB.Query(query, schema, tablename)
 	if err != nil {

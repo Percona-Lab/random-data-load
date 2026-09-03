@@ -1,0 +1,18 @@
+CREATE TABLE t1(
+	id bigint generated always as identity primary key,
+	data varchar(30)
+);
+CREATE TABLE t2(
+	id bigint generated always as identity primary key,
+	t1_id bigint not null,
+	data varchar(30),
+	CONSTRAINT fk_t2_t1 FOREIGN KEY(t1_id) REFERENCES t1(id)
+);
+
+-- a foreign key name only has to be unique within the table holding it, so t3
+-- can carry the same one: t2's constraint must not pick up t3's column too.
+CREATE TABLE t3(
+	id bigint generated always as identity primary key,
+	t1_id bigint not null,
+	CONSTRAINT fk_t2_t1 FOREIGN KEY(t1_id) REFERENCES t1(id)
+);

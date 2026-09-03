@@ -62,14 +62,31 @@ func TestMain(m *testing.M) {
 		log.Panicf("Could not connect to pg docker: %s", err)
 	}
 
-	var mysqldb *sql.DB
+	// The image only grants the test user the `test` database, and the catalog
+	// only ever shows a user the objects it has rights on. A fixture giving a
+	// constraint name a namesake in a second database needs both to create it
+	// and to have the tool see it. Global privileges only reach a client on
+	// its next connection, so this comes before the test user connects.
+	var mysqlrootdb *sql.DB
 	if err = pool.Retry(func() error {
-		mysqldb, err = sql.Open("mysql", fmt.Sprintf("dockertest:dockertest@(localhost:%s)/test?multiStatements=true", mysqlresource.GetPort("3306/tcp")))
+		mysqlrootdb, err = sql.Open("mysql", fmt.Sprintf("root:dockertest@(localhost:%s)/test", mysqlresource.GetPort("3306/tcp")))
 		if err != nil {
 			return err
 		}
-		return mysqldb.Ping()
+		return mysqlrootdb.Ping()
 	}); err != nil {
+		log.Panicf("Could not connect to mysql docker as root: %s", err)
+	}
+	if _, err = mysqlrootdb.Exec("GRANT ALL PRIVILEGES ON *.* TO 'dockertest'@'%'"); err != nil {
+		log.Panicf("Could not grant privileges to the mysql test user: %s", err)
+	}
+	mysqlrootdb.Close()
+
+	mysqldb, err := sql.Open("mysql", fmt.Sprintf("dockertest:dockertest@(localhost:%s)/test?multiStatements=true", mysqlresource.GetPort("3306/tcp")))
+	if err != nil {
+		log.Panicf("Could not connect to mysql docker: %s", err)
+	}
+	if err = mysqldb.Ping(); err != nil {
 		log.Panicf("Could not connect to mysql docker: %s", err)
 	}
 
@@ -213,6 +230,17 @@ func TestRun(t *testing.T) {
 		{
 			name:       "fk_multicol",
 			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id and t1.id2 = t2.t1_id2;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
+		},
+
+		// A constraint is only identified by its name together with the table
+		// holding it. Looked up by name alone, the namesake the fixture adds
+		// gets its column folded into t2's constraint, which then lists t1_id
+		// twice in the INSERT, and points at the namesake's parent table.
+		{
+			name:       "fk_shared_constraint_name",
+			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
 			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
 		},
