@@ -110,24 +110,52 @@ func shouldSkipVirtualFK(tables []*Table, vfk query.VirtualJoin) bool {
 				Str("loopReferencedTable", constraint.ReferencedTableName).Strs("loopReferencedColumnsName", constraint.ReferencedColumnsName).Strs("loopConstraintColumnsName", constraint.ColumnsName).
 				Msg("filtering virtual keys")
 
-			switch {
 			// TODO: we could "supplement" existing FKs with virtual ones, I'm not sure if that's a real use case yet
-			case strings.ToLower(vfk.Left.Table) == strings.ToLower(table.Name) &&
-				strings.ToLower(vfk.Right.Table) == strings.ToLower(constraint.ReferencedTableName) &&
-				isSliceSimilar(constraint.ColumnsName, vfk.Left.Columns) &&
-				isSliceSimilar(constraint.ReferencedColumnsName, vfk.Right.Columns):
-				return true
-
-				// flipped
-			case strings.ToLower(vfk.Right.Table) == strings.ToLower(table.Name) &&
-				strings.ToLower(vfk.Left.Table) == strings.ToLower(constraint.ReferencedTableName) &&
-				isSliceSimilar(constraint.ColumnsName, vfk.Right.Columns) &&
-				isSliceSimilar(constraint.ReferencedColumnsName, vfk.Left.Columns):
-
+			//
+			// The query's own orientation carries no meaning, so both readings
+			// of the guess are checked against the constraint.
+			if constraint.covers(table.Name, vfk.Left, vfk.Right) ||
+				constraint.covers(table.Name, vfk.Right, vfk.Left) {
 				return true
 			}
-
 		}
+	}
+	return false
+}
+
+// covers reports whether this constraint already requires everything a virtual
+// foreign key would add, reading child as the table holding the key.
+//
+// A guess taken from a query may name only part of a composite key: a query
+// joining on one column of a two-column key states nothing the schema does not
+// already, and adding a second constraint for that column would list it twice
+// in the INSERT.
+func (c *Constraint) covers(childTable string, child, parent query.VirtualJoinPart) bool {
+	if !strings.EqualFold(childTable, child.Table) ||
+		!strings.EqualFold(c.ReferencedTableName, parent.Table) ||
+		len(child.Columns) != len(parent.Columns) ||
+		len(child.Columns) == 0 {
+		return false
+	}
+
+	for i, childColumn := range child.Columns {
+		if !c.pairs(childColumn, parent.Columns[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// pairs reports whether the constraint links these two columns to each other.
+// Their position within the key does not matter, only that they face one
+// another.
+func (c *Constraint) pairs(childColumn, parentColumn string) bool {
+	for i, column := range c.ColumnsName {
+		if !strings.EqualFold(column, childColumn) {
+			continue
+		}
+		return i < len(c.ReferencedColumnsName) &&
+			strings.EqualFold(c.ReferencedColumnsName[i], parentColumn)
 	}
 	return false
 }

@@ -53,12 +53,3 @@ func EscapedFieldsIsNotNull(fields []Field) string {
 	}
 	return strings.Join(names, " AND ")
 }
-
-func isSliceSimilar(s1, s2 []string) bool {
-	for _, e := range s1 {
-		if !slices.ContainsFunc(s2, func(s string) bool { return strings.ToLower(s) == strings.ToLower(e) }) {
-			return false
-		}
-	}
-	return true
-}

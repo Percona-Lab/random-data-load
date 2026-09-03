@@ -249,15 +249,13 @@ func TestRun(t *testing.T) {
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 
-		/*
-			{
-				name:       "identifiers_skip_fk_multicol",
-				checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id and t1.id2 = t2.t1_id2;",
-				inputQuery: "select a1.id, a1.id2 from t1 a1 join t2 a2 on a1.id = a2.t1_id;",
-				engines:    []string{"pg", "mysql"},
-				cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
-			},
-		*/
+		{
+			name:       "identifiers_skip_fk_multicol",
+			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id and t1.id2 = t2.t1_id2;",
+			inputQuery: "select a1.id, a1.id2 from t1 a1 join t2 a2 on a1.id = a2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
+		},
 		{
 			name: "fk_cascade_recursive",
 			// t1 alone, t2 dep on t1, t3 dep on t2 and t4 dep on t2+t3
@@ -279,6 +277,56 @@ func TestRun(t *testing.T) {
 			name:       "fk_virtual",
 			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
 			inputQuery: "select * from t1 join t2 on t1.id = t2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
+		},
+
+		{
+			// The join is written through a CTE, so it can only be found by
+			// descending into the CTE body and projecting the reference down
+			// onto the table it reads.
+			name:       "fk_virtual_cte",
+			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
+			inputQuery: "with a as (select * from t1) select * from a join t2 on a.id = t2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
+		},
+
+		{
+			name:       "fk_virtual_derived_table",
+			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
+			inputQuery: "select * from (select * from t1) a join t2 on a.id = t2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
+		},
+
+		{
+			// A semi-join asks for the same value overlap as a join: t2's
+			// values have to exist in t1.
+			name:       "fk_virtual_semijoin",
+			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
+			inputQuery: "select * from t2 where t2.t1_id in (select t1.id from t1);",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
+		},
+
+		{
+			// A comma-separated FROM puts the join condition in WHERE.
+			name:       "fk_virtual_where_join",
+			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id;",
+			inputQuery: "select * from t1, t2 where t1.id = t2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
+		},
+
+		{
+			// A composite key guessed from the query, with no foreign key in
+			// the schema to fall back on. Both columns have to come from the
+			// same parent row, which is only guaranteed if the two equalities
+			// are generated as one key rather than two.
+			name:       "fk_virtual_multicol",
+			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id and t1.id2 = t2.t1_id2;",
+			inputQuery: "select * from t1 join t2 on t1.id = t2.t1_id and t1.id2 = t2.t1_id2;",
 			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
 		},

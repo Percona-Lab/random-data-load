@@ -303,7 +303,7 @@ First rows will be hotter and sampled far more commonly, but it will nonetheless
 It will mostly sample around the --normal-mean based on --normal-stddev, and very few rows on the outlier parts.
 
 ## Guessing implicit foreign keys from queries
-If no foreign keys are explicitely defined in the schema, but the query is using JOINs with a "ON" clause, `random-data-load` will infer the foreign keys and insert valid values so that JOINs work.
+If no foreign keys are explicitely defined in the schema, but the query requires columns to match, `random-data-load` will infer the foreign keys and insert valid values so that the query returns rows.
 Can be disabled with --no-fk-guess
 
 An estimation can be made using:
@@ -311,11 +311,32 @@ An estimation can be made using:
 random-data-load query --query="$(cat huge_select.sql)"
 ``` 
 
-It will skip guessing foreign keys for those cases:
-- JOINs relying on subqueries instead of tables
-- JOINs made implicitely without JOIN keywords or "ON" clauses
-- (limitation) JOINs having its ON clause between parenthesis are currently thought to be subqueries and are skipped
-- JOINs conditions using ambiguous columns, without expliciting to what table it belongs. Example `FROM x JOIN y ON apple=pear` instead of `FROM x JOIN y ON x.apple=y.pear`
+Foreign keys are guessed from:
+- JOINs with an ON clause, parenthesised or not
+- JOINs written implicitely, with the condition in the WHERE clause: `FROM x, y WHERE x.a = y.b`
+- correlated subqueries: `WHERE EXISTS (SELECT 1 FROM y WHERE y.a = x.b)`
+- semi-joins: `WHERE x.a IN (SELECT y.b FROM y)`
+
+References are followed through subqueries and CTEs down to the real tables they read, so a query joining on a derived result generates data in the underlying tables:
+```
+WITH recent AS (SELECT order_id FROM orders WHERE currency = 'EUR')
+SELECT count(*) FROM recent r JOIN order_items oi ON r.order_id = oi.order_id;
+```
+generates `orders` and `order_items`, and the foreign key lands on `orders.order_id`. The same holds for derived tables, for a CTE reading from an earlier CTE, and through renamings, whether by a column alias or a CTE column list. When a CTE or subquery is a UNION, one foreign key is generated per branch, since the value may come from any of them. A recursive CTE contributes its anchor branch; the self-reference is ignored.
+
+A condition spanning several columns is generated as one composite foreign key rather than one key per column, so that a child row takes all its columns from the same parent row:
+```
+FROM purchases p JOIN items i ON p.id = i.purchase_id AND p.created_at = i.created_at
+```
+
+It will not guess a foreign key for:
+- conditions other than equality: `ON x.a > y.b` does not require the values to match
+- negated conditions, including `NOT IN`, which ask for the values to stay apart
+- values that cannot be traced back to a column, such as an aggregate or an expression in a subquery's SELECT list. These are reported with a warning naming the condition, since the query will not return rows without them
+- JOINs using a USING clause. Write the condition with ON, or declare it with --add-fk
+- JOIN conditions using ambiguous columns, without expliciting to what table it belongs. Example `FROM x JOIN y ON apple=pear` instead of `FROM x JOIN y ON x.apple=y.pear`
+
+Conditions on either side of an OR are kept as separate single-column keys, never merged into a composite one: only one of them has to hold, so merging would demand more of the data than the query does.
 
 ## Skipping fields that are not relevant to the query
 When using --query, `random-data-load` will avoid generating or sampling fields that are not necessary for the query to run.
@@ -424,6 +445,16 @@ Without clear plan:
 - [ ] be able to "suplement" existing foreign keys with additional columns ?
 
 ## Version history
+
+#### Unreleased
+- foreign keys are now guessed through subqueries and CTEs, projected down onto the real tables they read, including UNION branches, recursive CTEs, and columns renamed by an alias or a CTE column list
+- foreign keys are guessed from implicit JOINs written in the WHERE clause, from correlated EXISTS subqueries, and from IN (subquery) semi-joins
+- a multi-column JOIN condition now produces a single composite foreign key instead of one key per column, so a child row no longer mixes columns from different parent rows
+- only equality conditions produce a foreign key; range and negated conditions no longer invent one
+- a JOIN condition that cannot be traced to real columns is now reported with a warning naming the condition, instead of being dropped silently
+- fixed a crash on schema-qualified columns in a JOIN condition, e.g. `ON public.orders.order_id = oi.order_id`
+- fixed a query-guessed foreign key being added a second time when the schema already declared it as part of a composite key, which produced an INSERT listing a column twice
+- columns read only inside a CTE are no longer left out of the generated fields
 
 #### 0.2.3
 - NULL and/or fixed values can be injected at tunable rates

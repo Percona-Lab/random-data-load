@@ -1,0 +1,12 @@
+CREATE TABLE t1(
+	id bigint generated always as identity,
+	id2 int,
+	data varchar(30),
+	primary key(id, id2)
+);
+CREATE TABLE t2(
+	id bigint generated always as identity primary key,
+	t1_id bigint,
+	t1_id2 int,
+	data varchar(30)
+);
