@@ -219,6 +219,16 @@ func TestRun(t *testing.T) {
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=normal"}},
 		},
 
+		// The normal law reaches past the end of the table, so half of these
+		// row numbers have to be drawn again. Testing the same draw again
+		// could only give the same row number back, and looped forever.
+		{
+			name:       "fk_normal_outside_table",
+			checkQuery: "select count(distinct t1.id) between 1 and 99 from t1 join t2 on t1.id = t2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=normal", "--normal-mean=100", "--normal-stddev=50"}},
+		},
+
 		// 5% of 1000 will end up being 50, but we need 100 samples per chunks and t1_id has NOT NULL so it has to loop to get more samples
 		{
 			name:       "fk_binomial_looping_chunks",
@@ -468,6 +478,40 @@ func TestRun(t *testing.T) {
 			checkQuery: "select count(*) = 500 from t1 join t1 t1_2 on t1.id = t1_2.t1_id;",
 			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=1000", "--table=t1", "--default-relationship=sequential"}},
+		},
+
+		// A table the query joins to itself has no foreign key saying so, and
+		// the guessed one is a loop of its own: it used to leave the run with
+		// no possible insert order, sorting the tables forever.
+		{
+			name:       "fk_virtual_self_referencing",
+			checkQuery: "select count(*) = 500 from t1 join t1 t1_2 on t1.id = t1_2.t1_id;",
+			inputQuery: "select a.id, b.t1_id from t1 a join t1 b on a.id = b.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=1000", "--default-relationship=sequential"}},
+		},
+
+		// A key can only point at a key, so the parent is t1 even though the
+		// query names t2 first. Read as written, t1's own primary key was
+		// sampled from t2's rows instead, and took their values.
+		{
+			name:       "fk_virtual_join_written_backwards",
+			checkQuery: "select (count(*) = 100) and (max(id) <= 100) from t1;",
+			inputQuery: "select t2.id from t2 join t1 on t2.t1_id = t1.id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential"}},
+		},
+
+		// The side a join names first means nothing, so the guess has to be
+		// read the other way round when it would close a loop with a key the
+		// schema already has. Read as written, t1 and t2 waited on each other
+		// and the tables were sorted forever.
+		{
+			name:       "fk_virtual_reversed_join",
+			checkQuery: "select count(*) = 100 from t2 join t1 on t2.t1_id = t1.id;",
+			inputQuery: "select t2.id from t2 join t1 on t2.t1_id = t1.id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential"}},
 		},
 
 		{

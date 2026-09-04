@@ -770,6 +770,17 @@ func (a *analyzer) emitGroupedJoins(pairs []joinPair) {
 		}
 		seen[pair] = true
 
+		if strings.EqualFold(pair.left.Table, pair.right.Table) &&
+			strings.EqualFold(pair.left.Column, pair.right.Column) {
+			// Both sides reached the same column of the same table, as
+			// happens when a query carries one of its columns through a chain
+			// of derived tables and joins it back. Any row satisfies it, so
+			// there is no key to generate, and a column pointing at itself
+			// would leave the table waiting on itself.
+			log.Debug().Str("column", pair.left.Table+"."+pair.left.Column).Msg("skipping a column joined to itself")
+			continue
+		}
+
 		left, right := pair.left, pair.right
 		key := tablePair{left.Table, right.Table}
 

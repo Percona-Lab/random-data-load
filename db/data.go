@@ -97,6 +97,7 @@ func LoadTable(database, tablename string) (*Table, error) {
 	loadedTableCache[table.FullName()] = table
 
 	for constraintIdx := range table.Constraints {
+		table.Constraints[constraintIdx].TableName = table.Name
 		table.Constraints[constraintIdx].populateFields(table)
 		err = table.Constraints[constraintIdx].loadReferencedTable()
 		if err != nil {
@@ -252,33 +253,51 @@ func (t *Table) HasAnyConstraintLoop() bool {
 	return false
 }
 
+// IdentifyAndResolveSelfReferencingConstraintLoop breaks the loop a table
+// pointing at itself makes, by handing its self-referencing keys a copy of the
+// table to point at instead. The copy leaves the columns of those keys out, so
+// it can be inserted first, and the table then samples them from it.
+//
+// Every self-referencing key of the table shares that one copy: resolving only
+// one of them would leave the others pointing back at the table, which is the
+// loop again.
 func (t *Table) IdentifyAndResolveSelfReferencingConstraintLoop() (*Table, error) {
-	for cidx, c := range t.Constraints {
-		if c.ReferencedTable.Name == t.Name {
-			for _, field := range c.Fields {
-				if !field.IsNullable {
-					return nil, errors.Errorf("table %s is self referencing and one of fields (%s) is non-nullable. Consider dropping the foreign key named %s", t.Name, field.ColumnName, c.ConstraintName)
-				}
-			}
-			copiedTable := *t
-
-			copiedTable.Fields = slices.Clone(t.Fields)
-			for fidx, field := range copiedTable.Fields {
-				if !slices.ContainsFunc(c.ColumnsName, func(s string) bool { return strings.ToLower(s) == strings.ToLower(field.ColumnName) }) {
-					continue
-				}
-				field.Skip = true
-				copiedTable.Fields[fidx] = field
-			}
-
-			copiedTable.Constraints = slices.Clone(t.Constraints)
-			copiedTable.Constraints = append(copiedTable.Constraints[:cidx], copiedTable.Constraints[cidx+1:]...)
-			c.ReferencedTable = &copiedTable
-			log.Debug().Str("table", t.Name).Interface("base table constraints", t.Constraints).Interface("copied table constraints", copiedTable.Constraints).Int("constraintLen", len(t.Constraints)).Int("copiedConstraintLen", len(copiedTable.Constraints)).Interface("base table fields", t.Fields).Interface("copied table fields", copiedTable.Fields).Msg("table has a self-referencing foreign key. Cloning table")
-			return &copiedTable, nil
+	selfReferencing := Constraints{}
+	for _, c := range t.Constraints {
+		if !c.IsSelfReferencing() {
+			continue
 		}
+		for _, field := range c.Fields {
+			if !field.IsNullable {
+				return nil, errors.Errorf("table %s is self referencing and one of fields (%s) is non-nullable. Consider dropping the foreign key named %s", t.Name, field.ColumnName, c.ConstraintName)
+			}
+		}
+		selfReferencing = append(selfReferencing, c)
 	}
-	return nil, nil
+	if len(selfReferencing) == 0 {
+		return nil, nil
+	}
+
+	copiedTable := *t
+
+	columns := selfReferencing.ColumnsName()
+	copiedTable.Fields = slices.Clone(t.Fields)
+	for fidx, field := range copiedTable.Fields {
+		if !slices.ContainsFunc(columns, func(s string) bool { return strings.EqualFold(s, field.ColumnName) }) {
+			continue
+		}
+		field.Skip = true
+		copiedTable.Fields[fidx] = field
+	}
+
+	copiedTable.Constraints = slices.DeleteFunc(slices.Clone(t.Constraints), func(c *Constraint) bool {
+		return c.IsSelfReferencing()
+	})
+	for _, c := range selfReferencing {
+		c.ReferencedTable = &copiedTable
+	}
+	log.Debug().Str("table", t.Name).Interface("base table constraints", t.Constraints).Interface("copied table constraints", copiedTable.Constraints).Int("constraintLen", len(t.Constraints)).Int("copiedConstraintLen", len(copiedTable.Constraints)).Interface("base table fields", t.Fields).Interface("copied table fields", copiedTable.Fields).Msg("table has a self-referencing foreign key. Cloning table")
+	return &copiedTable, nil
 }
 
 func (f *Field) skippeable() bool {

@@ -14,6 +14,10 @@ import (
 	"github.com/ylacancellera/random-data-load/db"
 )
 
+// maxNormalDraws caps how many row numbers the normal law is asked for before
+// the table's closest row is taken instead.
+const maxNormalDraws = 1000
+
 type Sampler interface {
 	Sample() error
 }
@@ -180,9 +184,22 @@ func (s *BoxMullerSample) Sample() error {
 
 	rowNumbers := make([]string, s.limit)
 	for i := range rowNumbers {
+		// The law reaches past both ends of the table, so a row number
+		// landing outside it is drawn again. Each attempt needs a new pair of
+		// uniforms: testing the same one again can only give the same row
+		// number back, and did so forever.
 		var cosId int64 = -1
-		x1, x2 := rand.Float64(), rand.Float64()
-		for cosId < 0 || cosId > s.tableSize {
+		for attempt := 0; cosId < 0 || cosId > s.tableSize; attempt++ {
+			if attempt == maxNormalDraws {
+				// A mean sitting far outside the table, as --rows and
+				// --rows-per-table disagreeing leaves it, would be redrawn
+				// for a very long time. The nearest row it can reach stays
+				// closer to what was asked than looping does.
+				cosId = min(max(int64(math.Round(s.mean)), 0), s.tableSize)
+				log.Debug().Float64("mean", s.mean).Float64("stddev", s.stddev).Int64("tableSize", s.tableSize).Int64("rowNumber", cosId).Str("tablename", s.table).Msg("the normal law falls outside the table, sampling its closest row")
+				break
+			}
+			x1, x2 := rand.Float64(), rand.Float64()
 			cosId = int64(math.Round(s.mean + s.stddev*math.Sqrt(-2*math.Log(x1))*math.Cos(2*math.Pi*x2)))
 		}
 		rowNumbers[i] = strconv.FormatInt(cosId, 10)

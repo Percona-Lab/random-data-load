@@ -342,6 +342,32 @@ func TestParseQuery(t *testing.T) {
 			wantParams: map[string][]string{},
 		},
 		{
+			// A column carried down through a derived table and joined back to
+			// itself asks for nothing: every row satisfies it. Kept, it would
+			// become a key from a column to itself, leaving the table waiting
+			// on itself and no order in which to insert it.
+			name:    "column_joined_to_itself_yields_no_join",
+			engines: bothEngines,
+			query: "select 1 from orders o " +
+				"join (select order_id from orders) r on o.order_id = r.order_id;",
+
+			wantTables:      []string{"orders"},
+			wantJoins:       []string{},
+			wantIdentifiers: []string{"o", "order_id", "orders", "r"},
+			wantParams:      map[string][]string{},
+		},
+		{
+			// A table joined to itself on two different columns is a real key
+			// though, the one a parent_id column asks for.
+			name:            "self_join_on_another_column_is_a_key",
+			engines:         bothEngines,
+			query:           "select 1 from orders o join orders parent on parent.order_id = o.parent_id;",
+			wantTables:      []string{"orders"},
+			wantJoins:       []string{"orders(order_id)=orders(parent_id)"},
+			wantIdentifiers: []string{"o", "order_id", "orders", "parent", "parent_id"},
+			wantParams:      map[string][]string{},
+		},
+		{
 			name:    "duplicate_equality_yields_one_column",
 			engines: bothEngines,
 			query: "select 1 from purchases p join items i " +

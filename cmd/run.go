@@ -130,7 +130,15 @@ func (cmd *RunCmd) Run() error {
 		log.Debug().Interface("freq-map", frequency.SharedTableFrequency).Msg("merged exported statistics into frequency map")
 	}
 
-	// now we have the full table list, we check for any loops
+	// we can autocomplete foreign keys
+	joins = append(joins, cmd.AddForeignKeys...)
+	if len(joins) > 0 {
+		db.AddVirtualFKs(tables, joins)
+	}
+
+	// now we have the full table list and every key it will have to satisfy,
+	// we check for any loops. A guessed key can close one just as well as a
+	// key of the schema, so this comes after they are added.
 	for _, table := range tables {
 		copiedTable, err := table.IdentifyAndResolveSelfReferencingConstraintLoop()
 		if err != nil {
@@ -150,17 +158,15 @@ func (cmd *RunCmd) Run() error {
 		}
 	}
 
-	// we can autocomplete foreign keys
-	joins = append(joins, cmd.AddForeignKeys...)
-	if len(joins) > 0 {
-		db.AddVirtualFKs(tables, joins)
-	}
 	// and identify which constraints should be "garanteed" for this run
 	for _, table := range tables {
 		table.FlagConstraintThatArePartsOfThisRun(tables)
 	}
 	// so that we can sort based on the dependencies we need to satisfy
-	tablesSorted := db.SortTables(tables)
+	tablesSorted, err := db.SortTables(tables)
+	if err != nil {
+		return err
+	}
 
 	for _, table := range tablesSorted {
 		log.Debug().Str("table", table.Name).Int("number of constraint", len(table.Constraints)).Msg("tables sorted")

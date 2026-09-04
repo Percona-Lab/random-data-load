@@ -1,0 +1,11 @@
+CREATE TABLE t1(
+	id bigint generated always as identity primary key,
+	data varchar(30)
+);
+-- the schema already points t2 at t1, on another column: a join written the
+-- other way round has to be read as a key on t2 too, not on t1
+CREATE TABLE t2(
+	id bigint generated always as identity primary key,
+	t1_id bigint,
+	other_t1_id bigint references t1(id)
+);
