@@ -5,5 +5,5 @@ dist/*
 *.swp
 *.prof
 *.svg
-
+*.sql
 dist/
