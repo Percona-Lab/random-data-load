@@ -17,29 +17,28 @@ import (
 )
 
 type Insert struct {
-	table             *db.Table
-	writer            io.Writer
-	NotifyChan        chan int64
-	fklinks           ForeignKeyLinks
-	workersCount      int
-	insertMutex       sync.Mutex
-	maxTextSize       int64
-	uuidVersion       int
-	maxRetries        int
-	frequencies       frequency.ColumnFrequency
-	expectedTableSize int64
-	minGeneratedTime  *time.Time
-	maxGeneratedTime  *time.Time
+	table            *db.Table
+	writer           io.Writer
+	NotifyChan       chan int64
+	fklinks          ForeignKeyLinks
+	workersCount     int
+	insertMutex      sync.Mutex
+	maxTextSize      int64
+	uuidVersion      int
+	maxRetries       int
+	frequencies      frequency.ColumnFrequency
+	minGeneratedTime *time.Time
+	maxGeneratedTime *time.Time
 }
 
 type ForeignKeyLinks struct {
 	DefaultRelationship string            `name:"default-relationship" help:"Will define the default foreign-key relationship to apply. Possible values: ${BinomialFlag},${SequentialFlag}. The default relation can be overriden with other parameters --${BinomialFlag} or --${SequentialFlag}" enum:"${BinomialFlag},${SequentialFlag},${NormalFlag},${ParetoFlag}" default:"${BinomialFlag}"`
 	Binomial            map[string]string ` help:"Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). Format should be \"parent_table=child_table\" E.g: --${BinomialFlag}=\"customers=orders;orders=items\""`
 	Sequential          map[string]string `name:"sequential" help:"Defines a sequential foreign key links relationships, using SELECT ... LIMIT x OFFET y. Format should be \"parent_table=child_table\" E.g: --${SequentialFlag}=\"citizens=ssns\""`
-	CoinFlipPercent     float64           `name:"coin-flip-percent" help:"When used with ${BinomialFlag}, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10%% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --${SequentialFlag}. Lower value (e.g 0.001) will also slow down the sampling speed" default:"1"`
+	CoinFlipPercent     float64           `name:"coin-flip-percent" help:"When used with ${BinomialFlag}, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --${SequentialFlag}. Lower value (e.g 0.001) will also slow down the sampling speed" default:"1"`
 	Normal              map[string]string `help:"Defines a 1-N foreign key relationships using box-muller transformation to provide normal distribution. Slow method needing full table scans for each samples."`
-	NormalStddev        float64           `help:"Standard deviation to the normal law. Will default to 1/10 of the table size"`
-	NormalMean          float64           `help:"Mean of the normal law. Will default to the middle of the table, --rows/2"`
+	NormalStddev        float64           `help:"Standard deviation to the normal law. Will default to 1/10 of the row count of the parent table being sampled"`
+	NormalMean          float64           `help:"Mean of the normal law. Will default to the middle of the parent table being sampled"`
 	Pareto              map[string]string `help:"Defines a 1-N foreign key relationships using zipf (pareto) distribution. Slow method needing full table scans for each samples"`
 	ParetoS             float64           `help:"Zipf slope parameter. Must be above 1. Higher value will mean faster decay, so first rows will be hotter" default:"1.1"`
 	ParetoV             float64           `help:"Must be >=1. Directly map to V, https://pkg.go.dev/math/rand#Zipf." default:"1.0"`
@@ -137,12 +136,13 @@ func (in *Insert) run(count int64, bulksize int64, dryRun bool) error {
 	completeInserts := count / bulksize
 	remainder := count - completeInserts*bulksize
 	numJobs := completeInserts + 1 // + remainder
-	in.expectedTableSize = count
 
 	bulksizeJobs := make(chan int64, numJobs)
 	errChan := make(chan error, numJobs)
 	defer close(bulksizeJobs)
-	defer close(errChan)
+	// errChan is deliberately left open. A worker that gave up reports its
+	// error and returns, and the first error read here ends the run, so
+	// closing it would risk a send on a closed channel, which is a panic.
 
 	for w := 1; w <= in.workersCount; w++ {
 		go in.worker(errChan, bulksizeJobs, dryRun)
@@ -198,10 +198,10 @@ func (in *Insert) notify(n int64) {
 }
 
 // generate field and sample fields in parallel, since both operations are slow
-func (in *Insert) genQuery(count int64) *string {
+func (in *Insert) genQuery(count int64) (string, error) {
 
 	if count < 1 {
-		return nil
+		return "", nil
 	}
 
 	fieldsAsDefault := in.table.FieldsToInsertAsDefault()
@@ -256,6 +256,10 @@ func (in *Insert) genQuery(count int64) *string {
 		}()
 	}
 
+	// A failed sampling leaves the columns of a foreign key unfilled, so the
+	// insert cannot be written at all. It used to be logged and forgotten,
+	// which left the run reporting success after inserting nothing.
+	var sampleErr error
 	if len(fieldsToSample) != 0 {
 		wg.Add(1)
 		go func() {
@@ -267,26 +271,29 @@ func (in *Insert) genQuery(count int64) *string {
 			for i := range sampledValues {
 				sampledValues[i] = values[i][idxFieldsToGen:]
 			}
-			err := in.sampleConstraints(constraintsToSample, sampledValues)
-			if err != nil {
-				log.Error().Err(err).Msg("error when sampling field")
-			}
+			sampleErr = in.sampleConstraints(constraintsToSample, sampledValues)
 			wg.Done()
 		}()
 	}
 
 	wg.Wait()
+	if sampleErr != nil {
+		return "", errors.Wrapf(sampleErr, "cannot sample the foreign keys of %s.%s", in.table.Schema, in.table.Name)
+	}
 	for row := range values {
 		if values[row] == nil {
 			continue
 		}
-		insertQuery.WriteString(values[row].String())
+		renderedRow, err := values[row].Render()
+		if err != nil {
+			return "", errors.Wrapf(err, "cannot write a row of %s.%s", in.table.Schema, in.table.Name)
+		}
+		insertQuery.WriteString(renderedRow)
 		if row != len(values)-1 {
 			insertQuery.WriteString(",")
 		}
 	}
-	s := insertQuery.String()
-	return &s
+	return insertQuery.String(), nil
 }
 
 func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
@@ -295,10 +302,13 @@ func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
 		return 0, nil
 	}
 
-	insertQuery := in.genQuery(count)
+	insertQuery, err := in.genQuery(count)
+	if err != nil {
+		return 0, err
+	}
 
 	if dryRun {
-		if _, err := in.writer.Write([]byte(*insertQuery + "\n")); err != nil {
+		if _, err := in.writer.Write([]byte(insertQuery + "\n")); err != nil {
 			return 0, err
 		}
 		return count, nil
@@ -306,7 +316,7 @@ func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
 
 	in.insertMutex.Lock()
 	defer in.insertMutex.Unlock()
-	res, err := db.DB.Exec(*insertQuery)
+	res, err := db.DB.Exec(insertQuery)
 	if err != nil {
 		return 0, err
 	}
@@ -340,6 +350,8 @@ func (in *Insert) generateFieldsRow(fields []db.Field, insertValues []Getter) {
 			gw.Assign(NewRandomTime())
 		case "uuid":
 			gw.Assign(NewRandomUUID(in.uuidVersion))
+		case "json", "jsonb":
+			gw.Assign(NewRandomJSON(field.ColumnName))
 		case "char", "varchar", "tinyblob", "tinytext", "blob", "text", "mediumtext", "mediumblob", "longblob", "longtext":
 			maxSize := in.maxTextSize
 			if maxSize > field.CharacterMaximumLength.Int64 {
@@ -361,11 +373,35 @@ func (in *Insert) generateFieldsRow(fields []db.Field, insertValues []Getter) {
 	}
 }
 
+var parentRowCounts = map[string]int64{}
+var parentRowCountsMutex sync.Mutex
+
+// parentRowCount counts a parent's rows once per run. A parent is fully
+// inserted before anything pointing at it is, so the count does not move while
+// it is being read from.
+func parentRowCount(schema, table string) (int64, error) {
+	parentRowCountsMutex.Lock()
+	defer parentRowCountsMutex.Unlock()
+
+	if count, ok := parentRowCounts[schema+"."+table]; ok {
+		return count, nil
+	}
+	count, err := db.CountRows(schema, table)
+	if err != nil {
+		return 0, err
+	}
+	if count == 0 {
+		return 0, errors.Errorf("table %s.%s is empty, so there is nothing to point a foreign key at. Insert into it first, and check --rows-per-table if this run was meant to fill it", schema, table)
+	}
+	log.Debug().Str("table", table).Str("schema", schema).Int64("rows", count).Msg("counted the rows of a parent table")
+	parentRowCounts[schema+"."+table] = count
+	return count, nil
+}
+
 func (in *Insert) sampleConstraints(constraints db.Constraints, values [][]Getter) error {
 
 	colIdx := 0
 
-	var err error
 	for _, constraint := range constraints {
 
 		// subslice stores only a few columns grouped together with the FK columns
@@ -374,8 +410,19 @@ func (in *Insert) sampleConstraints(constraints db.Constraints, values [][]Gette
 			subSlice[i] = values[i][colIdx : colIdx+len(constraint.ReferencedFields)]
 		}
 
+		// Every sampler needs the size of the parent it reads from: it decides
+		// how large a coin flip has to be to bring anything back, where the
+		// sequential pager wraps around, and what row numbers the normal and
+		// zipf laws may draw. Measured on --rows, the size of the table being
+		// filled, all three were wrong for any parent of a different size,
+		// which a dimension table always is.
+		parentSize, err := parentRowCount(constraint.ReferencedTableSchema, constraint.ReferencedTableName)
+		if err != nil {
+			return err
+		}
+
 		samplerInit := in.fklinks.relationship(constraint.ReferencedTableName, in.table.Name)
-		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlice, in.expectedTableSize, &in.fklinks)
+		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlice, parentSize, &in.fklinks)
 		err = sampler.Sample()
 		if err != nil {
 			return errors.Wrap(err, "sampleFieldsTable")

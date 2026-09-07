@@ -3,7 +3,6 @@ package frequency
 import (
 	"math/rand"
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -176,6 +175,14 @@ func (c ColumnFrequency) InjectIndexValue(col string) (string, bool) {
 	return "", false
 }
 
+// MergeQueryParameters registers the literals a --query compares a column to,
+// so that the column actually holds some of them.
+//
+// A value already given a frequency is left alone rather than registered a
+// second time: --values-freq-map is a deliberate selectivity, and the two
+// entries used to be drawn independently and add up, so pinning a value the
+// query also mentions overshot it. This is what the --stat-file merge already
+// does with the values postgres observed.
 func MergeQueryParameters(params map[string][]string, defaultFrequency float64) {
 	// --query-param-freq=0 disables the whole thing. Registering the literals
 	// with a frequency of zero would never insert them, but it would still
@@ -197,8 +204,15 @@ func MergeQueryParameters(params map[string][]string, defaultFrequency float64) 
 		if !ok {
 			freq = Frequency{}
 		}
-		freq.IndexValues = append(freq.IndexValues, values...)
-		freq.IndexFrequencies = append(freq.IndexFrequencies, slices.Repeat([]float64{defaultFrequency}, len(values))...)
+		for _, value := range values {
+			if freq.claims(value) {
+				log.Debug().Str("table", parts[0]).Str("column", parts[1]).Str("value", value).
+					Msg("value already given a frequency on the command line, keeping that one instead of adding the query's")
+				continue
+			}
+			freq.IndexValues = append(freq.IndexValues, value)
+			freq.IndexFrequencies = append(freq.IndexFrequencies, defaultFrequency)
+		}
 		colFreqMap[parts[1]] = freq
 		SharedTableFrequency[parts[0]] = colFreqMap
 	}

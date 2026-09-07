@@ -138,6 +138,7 @@ func TestRun(t *testing.T) {
 		engines    []string
 		tables     []string
 		cmds       [][]string
+		expectErr  string // the run has to fail, and to say this much
 	}{
 		{
 			name:       "basic",
@@ -542,6 +543,85 @@ func TestRun(t *testing.T) {
 			engines: []string{"pg"},
 			cmds:    [][]string{[]string{"--rows=100000", "--table=t1", "--stat-file=tests/pg/pg_stats.json"}},
 		},
+		// Every column of this key is a type the generator can write but the
+		// sampler had no reader for, or had the wrong one: uuid and numeric
+		// arrive as bytes, boolean as a bool, and a timestamp written back
+		// with a Go-shaped layout is not the instant it was read. A key only
+		// joins if all four round-trip exactly.
+		{
+			name:       "fk_key_types",
+			checkQuery: "select count(*) = 100 from t1 join t2 on t1.id = t2.t1_id and t1.amount = t2.t1_amount and t1.flag = t2.t1_flag and t1.created_at = t2.t1_created_at;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
+		},
+
+		// A coin flip of the default 1% over a 50-row parent is expected to
+		// bring back half a row, and brings back none often enough to be the
+		// normal outcome. The guard rail used to measure --rows, the table
+		// being filled, so a small parent never tripped it.
+		{
+			name:       "fk_binomial_small_parent",
+			checkQuery: "select count(*) = 5000 from t2 join t1 on t1.id = t2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=50", "--table=t1"}, []string{"--rows=5000", "--table=t2", "--default-relationship=binomial", "--bulk-size=1000"}},
+		},
+
+		// More children than the parent has rows. A sequential relationship
+		// is 1-1 while the parent lasts and a round robin past that, so every
+		// parent row is used and none of the children is left unfilled.
+		{
+			name:       "fk_sequential_fanout",
+			checkQuery: "select (count(*) = 250) and (count(distinct t2.t1_id) = 100) from t2 join t1 on t1.id = t2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=250", "--table=t2", "--default-relationship=sequential"}},
+		},
+
+		// A column of a type nothing can generate is left out of the INSERT.
+		// NOT NULL and with no default, that can only be rejected by the
+		// engine, naming a column the user never mentioned, so it is refused
+		// up front instead.
+		{
+			name:      "unsupported_type_not_null",
+			engines:   []string{"pg"},
+			cmds:      [][]string{[]string{"--rows=100", "--table=t1"}},
+			expectErr: "no value can be generated for public.t1.source",
+		},
+
+		// Nullable, the same column is only worth a warning: the run works
+		// and the column stays empty.
+		{
+			name:       "unsupported_type_nullable",
+			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN source IS NULL THEN 1 ELSE 0 END) = 100) and (sum(CASE WHEN note IS NOT NULL THEN 1 ELSE 0 END) = 100) from t1;",
+			engines:    []string{"pg"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
+
+		// json documents are generated rather than left out: a document is
+		// usually the widest thing a row holds, and a row missing it is not
+		// the row being reproduced.
+		{
+			name:       "json",
+			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN doc->>'generated_by' = 'random-data-load' THEN 1 ELSE 0 END) = 100) from t1;",
+			engines:    []string{"pg"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
+		{
+			name:       "json",
+			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN json_unquote(json_extract(doc, '$.generated_by')) = 'random-data-load' THEN 1 ELSE 0 END) = 100) from t1;",
+			engines:    []string{"mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
+
+		// A value pinned by hand that the query also filters on. The two used
+		// to be registered separately and drawn independently, so the
+		// selectivity asked for, 0.28, came out at 0.28 + 0.1*(1-0.28).
+		{
+			name:       "values_freq_map_query_overlap",
+			checkQuery: "select (count(*) = 20000) AND (sum(CASE WHEN c2 = 'DHL' THEN 1 ELSE 0 END) between 5300 and 5900) from t1;",
+			inputQuery: "select * from t1 where c2 = 'DHL'",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=20000", "--table=t1", "--null-freq=0", "--values-freq-map=t1.c2=DHL:0.28"}},
+		},
 	}
 
 	for _, test := range tests {
@@ -577,9 +657,25 @@ func TestRun(t *testing.T) {
 				errlog += toolExecutable + " " + strings.Join(args, " ") + "\n"
 
 				out, err := exec.Command(toolExecutable, args...).CombinedOutput()
+				if test.expectErr != "" {
+					// The run has to refuse the job rather than insert
+					// nothing and report success: a script checking $? has
+					// no other way to know.
+					if err == nil {
+						t.Fatalf("%sexpected %s to fail with %q, it succeeded. out: %s", errlog, toolExecutable, test.expectErr, out)
+					}
+					if !strings.Contains(string(out), test.expectErr) {
+						t.Fatalf("%sexpected the failure to mention %q, out: %s", errlog, test.expectErr, out)
+					}
+					continue
+				}
 				if err != nil {
 					t.Fatalf("%sfailed to exec %s: %v, out: %s", errlog, toolExecutable, err, out)
 				}
+			}
+
+			if test.checkQuery == "" {
+				continue
 			}
 
 			row := testsdb[engine].db.QueryRow(test.checkQuery)

@@ -1,0 +1,16 @@
+CREATE TABLE t1(
+	id char(36),
+	amount decimal(14,4),
+	flag boolean,
+	created_at datetime,
+	data varchar(30),
+	primary key (id, amount, flag, created_at)
+);
+CREATE TABLE t2(
+	id bigint auto_increment primary key,
+	t1_id char(36) not null,
+	t1_amount decimal(14,4) not null,
+	t1_flag boolean not null,
+	t1_created_at datetime not null,
+	foreign key (t1_id, t1_amount, t1_flag, t1_created_at) references t1(id, amount, flag, created_at)
+);

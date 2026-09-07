@@ -1,0 +1,5 @@
+CREATE TABLE t1 (
+	id bigint generated always as identity primary key,
+	doc jsonb not null,
+	doc2 json
+);

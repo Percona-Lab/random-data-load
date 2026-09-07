@@ -227,3 +227,11 @@ func (_ MySQL) FilterOnRowNumberFromClause(_ []Field, table, schema string) stri
 func (_ MySQL) FilterOnRowNumberVarClause() string {
 	return "(@rownumber := @rownumber + 1)"
 }
+
+// ValueTimeLayout leaves the offset out: DATETIME holds no time zone, and only
+// 8.0.19 and above accept one in a literal at all. The driver hands the value
+// over in the location it will read it back in, so writing it as it stands
+// round-trips.
+func (_ MySQL) ValueTimeLayout() string {
+	return "2006-01-02 15:04:05.999999"
+}

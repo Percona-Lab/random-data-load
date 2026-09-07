@@ -68,6 +68,8 @@ func isSupportedType(fieldType string) bool {
 		"uuid":       true,
 		"bool":       true,
 		"boolean":    true,
+		"json":       true,
+		"jsonb":      true,
 	}
 	_, ok := supportedTypes[fieldType]
 	return ok
@@ -164,6 +166,33 @@ func (t *Table) FieldsToGenerate() []Field {
 			continue
 		}
 		if field.IsGenerated {
+			continue
+		}
+		if t.IsFieldInAnyConstraints(field) {
+			continue
+		}
+
+		fields = append(fields, field)
+	}
+	return fields
+}
+
+// FieldsUnsupported returns the fields this run cannot fill because no
+// generator knows their type. They are left out of the INSERT entirely, so the
+// engine gives them their default, which is NULL when they have none.
+//
+// It is the complement of FieldsToGenerate: a column left out for any other
+// reason is left out on purpose, and a foreign key column is sampled from its
+// parent rather than generated, so its type does not have to be one this list
+// knows.
+func (t *Table) FieldsUnsupported() []Field {
+	fields := []Field{}
+
+	for _, field := range t.Fields {
+		if field.Skip || field.IsGenerated || isSupportedType(field.DataType) {
+			continue
+		}
+		if !field.IsNullable && field.ColumnKey == "PRI" && field.AutoIncrement {
 			continue
 		}
 		if t.IsFieldInAnyConstraints(field) {

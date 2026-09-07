@@ -202,3 +202,10 @@ func (_ Postgres) FilterOnRowNumberFromClause(fields []Field, table, schema stri
 func (_ Postgres) FilterOnRowNumberVarClause() string {
 	return "rownumber"
 }
+
+// ValueTimeLayout keeps the offset the value was read with, so that a
+// timestamptz sampled from a parent row is stored as the same instant whatever
+// the session's TimeZone is.
+func (_ Postgres) ValueTimeLayout() string {
+	return "2006-01-02 15:04:05.999999-07:00"
+}

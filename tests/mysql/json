@@ -1,0 +1,4 @@
+CREATE TABLE t1 (
+	id bigint auto_increment primary key,
+	doc json not null
+);

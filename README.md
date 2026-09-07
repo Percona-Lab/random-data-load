@@ -114,8 +114,8 @@ Common options:
 |--table|Table to insert to. When using --query, --table will be used to restrict the tables to insert to.|
 |--query|Providing a query will analyze its schema usage, insert recursively into tables, and identify implicit joins|
 |--no-skip-fields|Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found.|
-|--null-freq|Define how frequent nullable fields should be NULL|
-|--null-freq-map|Define how frequent nullable fields should be NULL for a given column. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=73;t1.c2=4\" to set 73% or 4% of NULL for respective columns|
+|--null-freq|Define how frequent nullable fields should be NULL, as a fraction between 0 and 1 (Default: 0.1)|
+|--null-freq-map|Define how frequent nullable fields should be NULL for a given column, as a fraction between 0 and 1 like --null-freq. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=0.73;t1.c2=0.04\" to set 73% or 4% of NULL for respective columns|
 |--values-freq-map|Inject arbitrary values at fixed frequencies. The format is "--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99" so that val1 will be on 75% of rows and val2 on 23% for column c1|
 |--stat-file|Scan a column statistics export and reuse its null_frac, most_common_vals and most_common_freqs instead of setting --null-freq-map and --values-freq-map by hand. Use the `export-stat` subcommand to get the command producing that file|
 |--min-generated-time|Generated timestamps will be after this date. Format is RFC3339. Will default to --max-generated-time - 1 year|
@@ -128,11 +128,11 @@ Foreign key sampling options:
 |--no-fk-guess|Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-foreign-keys.|
 |--default-relationship|Will define the default foreign-key relationship to apply. Possible values: binomial,sequential. The default relation can be overriden with other parameters --binomial or --sequential|
 |--binomial|Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). Format should be "parent_table=child_table". E.g: --binomial="customers=orders;orders=items"|
-|--coin-flip-percent|When used with --binomial, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --sequential (Default: 1)|
-|--sequential|Defines a sequential foreign key links relationships. Format should be "parent_table=child_table". E.g: --sequential="citizens=ssns"|
+|--coin-flip-percent|When used with --binomial, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --sequential. It is raised automatically, per relationship, when the parent being sampled is too small for it to bring anything back (Default: 1)|
+|--sequential|Defines a sequential foreign key links relationships. Format should be "parent_table=child_table". E.g: --sequential="citizens=ssns". The relationship is 1-1 for as long as the parent has rows left, and a round robin over the parent past that|
 |--normal|Defines a 1-N foreign key relationships using box-muller transformation to provide normal distribution. Slow method needing full table scans for each samples.|
-|--normal-stddev|Standard deviation to the normal law. Will default to 1/10 of the table size|
-|--normal-mean|Mean of the normal law. Will default to the middle of the table, --rows/2|
+|--normal-stddev|Standard deviation to the normal law. Will default to 1/10 of the row count of the parent table being sampled|
+|--normal-mean|Mean of the normal law. Will default to the middle of the parent table being sampled|
 |--pareto|Defines a 1-N foreign key relationships using zipf (pareto) distribution. Slow method needing full table scans for each samples|
 |--pareto-s|Zipf slope parameter. Must be above 1. Higher value will mean faster decay, so first rows will be hotter|
 |--pareto-v|Must be >=1. Directly map to V, https://pkg.go.dev/math/rand#Zipf.|
@@ -265,6 +265,12 @@ To enforce orders, an arbitrary 'ORDER BY 1' is made. This is so that --sequenti
 
 Composites foreign keys are supported.
 With very low chances to sample rows, we might sample too little. The tool will loop until it sampled enough rows to fill the next bulk insert.
+
+A parent key is read whatever its type, including the types no value can be generated for: a `uuid`, `numeric` or `boolean` primary key is read and copied verbatim into the child, so a column this tool cannot invent a value for can still be pointed at. Note that postgres reports both `numeric(p,s)` and `decimal(p,s)` as `numeric`.
+
+Every distribution is measured against the parent table it samples, not against --rows: --coin-flip-percent is raised when the parent is too small for it (a 1% coin flip over a 500-row dimension table is expected to return 5 rows, and returns none often enough for it to be the normal outcome), --normal-mean and --normal-stddev default to the middle and a tenth of the parent, and --sequential wraps back to the parent's first row once it has handed out all of them.
+
+An empty parent table is refused, naming it: there is nothing for a foreign key to point at, and the child rows it cannot fill are not silently left out.
 
 **1.** sequential relationships will sample with LIMIT and OFFSET:  
 ```
@@ -471,11 +477,19 @@ They will use an associated gofakeit generator, https://github.com/brianvoe/gofa
 |longtext|up to --max-text-size chars random paragraph|
 |enum|A random item from the valid items list|
 |set|A random item from the valid items list|
+|uuid|A random uuid v4, or v7 with --uuid-version=7|
+|json - jsonb|A small generated document. It bears no resemblance to what production stores, only a comparable width|
 
 Valuable types currently not implemented:
-- JSONs
 - Geospatial
 - Vectors
+- Arrays, and the postgres network, range and money types
+
+A column of a type that cannot be generated is left out of the INSERT entirely, so the engine gives it its default. This is now said out loud rather than left to be discovered:
+- nullable, or holding a default: a warning names the column and its type. The run works, and the column ends up entirely NULL or entirely its default, so the rows are narrower than the ones being reproduced.
+- NOT NULL with no default: the run is refused before a single row is written, --dry-run included, since the engine could only reject every insert.
+
+A column can be left out of a run on purpose by naming the columns to fill in a --query.
 
 ## How to download the precompiled binaries
 
@@ -512,6 +526,16 @@ Without clear plan:
 ## Version history
 
 #### Unreleased
+- parent keys of every type can be sampled, `uuid` and `numeric` included, instead of taking the process down with a nil scan destination
+- a sampled `decimal`/`numeric` keeps every digit the database wrote, and a sampled date is written back in a form the engine reads back as the same instant
+- a run that cannot fill a column now fails with a message naming the table and the reason, and a non-zero exit status, where it used to panic and exit 0
+- --coin-flip-percent, --normal-mean and --normal-stddev are measured against the parent table being sampled rather than against --rows, so a small parent feeding a large child works with the defaults
+- --sequential wraps around the parent instead of running past its last row, making it a round robin once the parent is exhausted; it no longer panics when asked for more children than the parent has rows
+- a value given a frequency by --values-freq-map is no longer counted a second time when the --query mentions it too, which used to add the two frequencies together
+- json and jsonb columns are generated instead of being dropped from the INSERT
+- a column of a type that cannot be generated is reported: warned about when it is nullable or has a default, and refused up front when it is NOT NULL without one, in --dry-run too
+- an empty parent table is reported by name instead of failing with an empty sample
+- sampled text values are escaped, so a parent key holding a quote no longer breaks the insert
 - foreign keys are now guessed through subqueries and CTEs, projected down onto the real tables they read, including UNION branches, recursive CTEs, and columns renamed by an alias or a CTE column list
 - foreign keys are guessed from implicit JOINs written in the WHERE clause, from correlated EXISTS subqueries, and from IN (subquery) semi-joins
 - a multi-column JOIN condition now produces a single composite foreign key instead of one key per column, so a child row no longer mixes columns from different parent rows

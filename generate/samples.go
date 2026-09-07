@@ -18,6 +18,13 @@ import (
 // the table's closest row is taken instead.
 const maxNormalDraws = 1000
 
+// minBernoulliCandidates is how many rows a single coin-flip sample has to be
+// expected to bring back before --coin-flip-percent is left alone. A draw
+// expected to return this many rows misses every one of them about once in
+// 10^9 samples; the default percentage over a small parent misses them often,
+// and an empty sample fills no foreign key.
+const minBernoulliCandidates = 20
+
 type Sampler interface {
 	Sample() error
 }
@@ -51,12 +58,19 @@ func (s *sampleCommon) query(query string, values [][]Getter) error {
 		scannedGetter := make([]ScannerGetter, len(s.fields))
 		for fieldIdx, field := range s.fields {
 			getter := s.getterFromField(field)
+			if getter == nil {
+				// Unreachable: getterFromField falls back on a string reader.
+				// Left in because a nil destination reaching rows.Scan used to
+				// be a segmentation fault rather than an error.
+				return errors.Errorf("no way to read column %s.%s of type %s, needed to fill a foreign key", s.table, field.ColumnName, field.DataType)
+			}
 			scannedGetter[fieldIdx] = getter
 			scannedValuesInterface[fieldIdx] = getter
 		}
 		err = rows.Scan(scannedValuesInterface...)
 		if err != nil {
-			return errors.Wrapf(err, "failed to scan samples with query %s", query)
+			return errors.Wrapf(err, "cannot read the sampled rows of %s.%s (columns %s), a parent key type may not be readable, query %s",
+				s.schema, s.table, db.EscapedNamesListFromFields(s.fields), query)
 		}
 		for fieldIdx := range s.fields {
 			values[rowIdx][fieldIdx] = &GetterWrapper{scannedGetter[fieldIdx]}
@@ -73,7 +87,8 @@ func (s *sampleCommon) query(query string, values [][]Getter) error {
 	}
 
 	if rowIdx == 0 {
-		return fmt.Errorf("cannot get samples: %s", errors.Errorf("table %s was empty", s.table))
+		return errors.Errorf("sampling %s.%s brought back no row at all, so the foreign key of this insert cannot be filled. Query: %s",
+			s.schema, s.table, query)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("cannot get samples: %s", err)
@@ -85,22 +100,37 @@ func (s *sampleCommon) query(query string, values [][]Getter) error {
 	return nil
 }
 
+// getterFromField picks how to read one column of a parent row.
+//
+// The list is wider than the one the generator uses: a column this tool cannot
+// generate can still be the key of a table it has to point at, and a uuid or a
+// numeric primary key is a common one. Anything unlisted is read as text,
+// which is what a driver hands over for a type it has nothing better for; if
+// it hands over something else instead, the scan says so, naming the column.
 func (s *sampleCommon) getterFromField(f db.Field) ScannerGetter {
 
 	switch f.DataType {
 	case "tinyint", "smallint", "mediumint", "int", "integer", "bigint", "year":
 		return NewScannedInt()
-	case "char", "varchar", "blob", "text", "mediumtext",
-		"mediumblob", "longblob", "longtext":
+	case "char", "varchar", "blob", "text", "tinytext", "tinyblob", "mediumtext",
+		"mediumblob", "longblob", "longtext", "uuid", "enum", "set":
 		return NewScannedString()
 	case "binary", "varbinary":
 		return NewScannedBinary()
-	case "float", "decimal", "double":
+	case "float", "decimal", "double", "numeric":
+		// postgres reports both numeric(p,s) and decimal(p,s) as numeric, and
+		// hands the value over as text either way.
 		return NewScannedDecimal()
+	case "bool", "boolean":
+		return NewScannedBool()
 	case "date", "time", "datetime", "timestamp":
 		return NewScannedTime()
 	}
-	return nil
+	logOnce("unlistedSampledType:"+s.schema+"."+s.table+"."+f.ColumnName, func() {
+		log.Warn().Str("table", s.table).Str("schema", s.schema).Str("column", f.ColumnName).Str("type", f.DataType).
+			Msg("no reader is written for this parent key type, reading it as text. Check the inserted values if the type is not a text one")
+	})
+	return NewScannedString()
 }
 
 func (s *sampleCommon) Init(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, tableSize int64, fkCli *ForeignKeyLinks) {
@@ -115,38 +145,101 @@ func (s *sampleCommon) Init(fields []db.Field, schema, tablename, constraintName
 	s.fkCli = fkCli
 }
 
+// relationshipKey names one parent/foreign-key pair, so that a note about it
+// is logged once instead of once per bulk: a sampler is rebuilt for each one.
+func (s *sampleCommon) relationshipKey() string {
+	return s.schema + "." + s.table + "/" + s.constraintName
+}
+
+var loggedOnce sync.Map
+
+func logOnce(key string, f func()) {
+	if _, alreadyLogged := loggedOnce.LoadOrStore(key, struct{}{}); !alreadyLogged {
+		f()
+	}
+}
+
+// uniformCursor is the paging state of one sequential relationship, shared by
+// every bulk of the run. Only the offset is shared: the sampler itself is
+// rebuilt for each bulk, so two workers cannot hand each other's rows to the
+// wrong insert.
+type uniformCursor struct {
+	mutex   sync.Mutex
+	offset  int64
+	wrapped bool
+}
+
 type UniformSample struct {
 	sampleCommon
-	lastOffset int // paging by offset is bad, but it will work with compound pk, lack of pk, or complex pk types
-	mutex      sync.Mutex
+	cursor *uniformCursor // paging by offset is bad, but it will work with compound pk, lack of pk, or complex pk types
 }
 
+// Sample reads the next page of the parent, wrapping back to its first row
+// once the whole table has been handed out.
+//
+// A sequential relationship is a 1-1 one for as long as the parent has rows
+// left. Past that it becomes a round robin, which is the closest thing to what
+// was asked for: paging further used to select nothing and leave the insert
+// with unfilled columns.
 func (s *UniformSample) Sample() error {
 
-	// choosing a chunk + updating lastOffset is the only part that require exclusive access
-	s.mutex.Lock()
-	query := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s ORDER BY 1 LIMIT %d OFFSET %d",
-		db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table), db.EscapedFieldsIsNotNull(s.fields), s.limit, s.lastOffset)
+	for filled := 0; filled < len(s.values); {
+		offset, want := s.nextPage(len(s.values) - filled)
 
-	s.lastOffset += s.limit
-	s.mutex.Unlock()
+		query := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s ORDER BY 1 LIMIT %d OFFSET %d",
+			db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table),
+			db.EscapedFieldsIsNotNull(s.fields), want, offset)
 
-	return s.query(query, s.values)
+		if err := s.query(query, s.values[filled:filled+want]); err != nil {
+			return err
+		}
+		filled += want
+	}
+	return nil
 }
 
-var storedUniformSamples = map[string]*UniformSample{}
-var storedUniformSamplesMutex = sync.Mutex{}
+// nextPage reserves the next stretch of the parent's rows for this caller,
+// keeping a page from straddling the end of the table: a page reaching past it
+// comes back short, and the rows it did not bring back would be filled by
+// repeating the ones it did.
+func (s *UniformSample) nextPage(want int) (offset int64, size int) {
+	s.cursor.mutex.Lock()
+	defer s.cursor.mutex.Unlock()
+
+	if s.tableSize > 0 {
+		if s.cursor.offset >= s.tableSize {
+			s.cursor.offset = 0
+			if !s.cursor.wrapped {
+				s.cursor.wrapped = true
+				log.Info().Str("table", s.table).Str("schema", s.schema).Int64("parentRows", s.tableSize).
+					Msgf("every row of %s has been used once by the %s relationship, starting over from its first row. A sequential relationship is 1-1 only while the parent has rows left", s.table, SequentialFlag)
+			}
+		}
+		if int64(want) > s.tableSize-s.cursor.offset {
+			want = int(s.tableSize - s.cursor.offset)
+		}
+	}
+
+	offset = s.cursor.offset
+	s.cursor.offset += int64(want)
+	return offset, want
+}
+
+var storedUniformCursors = map[string]*uniformCursor{}
+var storedUniformCursorsMutex = sync.Mutex{}
 
 func NewUniformSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, tableSize int64, fkCli *ForeignKeyLinks) Sampler {
-	storedUniformSamplesMutex.Lock()
-	defer storedUniformSamplesMutex.Unlock()
-	if s, ok := storedUniformSamples[tablename+constraintName]; ok {
-		s.values = values
-		return s
-	}
 	s := &UniformSample{}
 	s.Init(fields, schema, tablename, constraintName, values, tableSize, fkCli)
-	storedUniformSamples[tablename+constraintName] = s
+
+	storedUniformCursorsMutex.Lock()
+	defer storedUniformCursorsMutex.Unlock()
+	cursor, ok := storedUniformCursors[tablename+constraintName]
+	if !ok {
+		cursor = &uniformCursor{}
+		storedUniformCursors[tablename+constraintName] = cursor
+	}
+	s.cursor = cursor
 	return s
 }
 
@@ -166,8 +259,40 @@ func (s *DBRandomSample) Sample() error {
 func NewDBRandomSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, tableSize int64, fkCli *ForeignKeyLinks) Sampler {
 	s := &DBRandomSample{}
 	s.Init(fields, schema, tablename, constraintName, values, tableSize, fkCli)
-	s.coinFlipPercent = fkCli.CoinFlipPercent
+	s.coinFlipPercent = s.guardedCoinFlipPercent(fkCli.CoinFlipPercent)
 	return s
+}
+
+// guardedCoinFlipPercent raises --coin-flip-percent when the parent this
+// relationship samples is too small for it to bring anything back.
+//
+// A coin flip of p percent over a parent of N rows brings back about N*p/100
+// of them, so how low the percentage can go is decided by the parent being
+// read. Measured against --rows, the size of the table being filled, the guard
+// never fired for a small parent feeding a large child, which is the one shape
+// that needs it: 1% of a 500-row dimension table is five rows on average and
+// none of them often enough to matter, and a sample bringing nothing back
+// fills no foreign key.
+//
+// Only emptiness is guarded against. A percentage large enough to sample
+// reliably is left exactly as it was asked for, even when the sample then has
+// to be repeated to fill a whole bulk: favouring the hot rows of a table is
+// what the flag is for.
+func (s *sampleCommon) guardedCoinFlipPercent(asked float64) float64 {
+	if s.tableSize <= 0 {
+		return asked
+	}
+
+	minimum := math.Min(100, 100*float64(minBernoulliCandidates)/float64(s.tableSize))
+	if asked >= minimum {
+		return asked
+	}
+
+	logOnce("coinFlipGuard:"+s.relationshipKey(), func() {
+		log.Info().Str("parent", s.table).Int64("parentRows", s.tableSize).Float64("coinFlipPercent", minimum).
+			Msgf("raising --coin-flip-percent from %g to %g for %s: a %g%% coin flip over its %d rows is expected to bring back fewer than %d, and often none at all", asked, minimum, s.table, asked, s.tableSize, minBernoulliCandidates)
+	})
+	return minimum
 }
 
 type BoxMullerSample struct {
@@ -191,10 +316,10 @@ func (s *BoxMullerSample) Sample() error {
 		var cosId int64 = -1
 		for attempt := 0; cosId < 0 || cosId > s.tableSize; attempt++ {
 			if attempt == maxNormalDraws {
-				// A mean sitting far outside the table, as --rows and
-				// --rows-per-table disagreeing leaves it, would be redrawn
-				// for a very long time. The nearest row it can reach stays
-				// closer to what was asked than looping does.
+				// A mean sitting far outside the table, as --normal-mean set
+				// by hand leaves it, would be redrawn for a very long time.
+				// The nearest row it can reach stays closer to what was asked
+				// than looping does.
 				cosId = min(max(int64(math.Round(s.mean)), 0), s.tableSize)
 				log.Debug().Float64("mean", s.mean).Float64("stddev", s.stddev).Int64("tableSize", s.tableSize).Int64("rowNumber", cosId).Str("tablename", s.table).Msg("the normal law falls outside the table, sampling its closest row")
 				break
@@ -222,8 +347,24 @@ func NewBoxMullerSample(fields []db.Field, schema, tablename, constraintName str
 	s := &BoxMullerSample{}
 	s.Init(fields, schema, tablename, constraintName, values, tableSize, fkCli)
 
+	// The law draws row numbers of the parent, so its defaults are taken from
+	// the parent's size. Taken from --rows, the size of the table being
+	// filled, the mean of a small parent landed outside it and every draw had
+	// to be redrawn.
 	s.stddev = fkCli.NormalStddev
+	if s.stddev == 0 {
+		s.stddev = float64(tableSize) / 10
+		logOnce("normalStddev:"+s.relationshipKey(), func() {
+			log.Info().Str("parent", tablename).Int64("parentRows", tableSize).Msgf("setting --normal-stddev to %.2f for %s (its row count / 10) by default", s.stddev, tablename)
+		})
+	}
 	s.mean = fkCli.NormalMean
+	if s.mean == 0 {
+		s.mean = float64(tableSize) / 2
+		logOnce("normalMean:"+s.relationshipKey(), func() {
+			log.Info().Str("parent", tablename).Int64("parentRows", tableSize).Msgf("setting --normal-mean to %.2f for %s (the middle of the table) by default", s.mean, tablename)
+		})
+	}
 	return s
 }
 
