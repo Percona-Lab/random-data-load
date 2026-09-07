@@ -66,8 +66,19 @@ func (cmd *RunCmd) Run() error {
 	// the parent's real row count. Guarded here against --rows, a small parent
 	// with a large child never tripped the guard, which is the one case that
 	// needed it.
-	if (cmd.DefaultRelationship == generate.ParetoFlag || len(cmd.Pareto) > 0) && (cmd.ParetoS <= 1.0 || cmd.ParetoV < 1) {
-		return errors.New("--pareto-s needs to be >1, --pareto-v needs to be >=1")
+	if cmd.DefaultRelationship == generate.ParetoFlag || len(cmd.Pareto) > 0 {
+		// every value has to be in range, not just the one given for every
+		// relationship: a per-parent override is used exactly the same way
+		for _, s := range cmd.ParetoS.Values() {
+			if s <= 1.0 {
+				return errors.Errorf("--pareto-s needs to be >1, got %g", s)
+			}
+		}
+		for _, v := range cmd.ParetoV.Values() {
+			if v < 1 {
+				return errors.Errorf("--pareto-v needs to be >=1, got %g", v)
+			}
+		}
 	}
 
 	tablesNames := map[string]struct{}{}

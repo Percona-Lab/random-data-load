@@ -52,6 +52,13 @@ func main() {
 		kong.ValueMapper(&cli.Run.AddForeignKeys, query.VirtualJoins{}),
 		kong.ValueMapper(&cli.Run.NullFreqMap, &frequency.FrequencyNullParameter{}),
 		kong.ValueMapper(&cli.Run.ValuesFreqMap, &frequency.FrequencyIndexValuesParameter{}),
+		// every sampler's tuning takes a value per parent table as well as one
+		// for the whole run, so each needs its own reader
+		kong.ValueMapper(&cli.Run.CoinFlipPercent, &generate.RelationshipFloat{}),
+		kong.ValueMapper(&cli.Run.NormalStddev, &generate.RelationshipFloat{}),
+		kong.ValueMapper(&cli.Run.NormalMean, &generate.RelationshipFloat{}),
+		kong.ValueMapper(&cli.Run.ParetoS, &generate.RelationshipFloat{}),
+		kong.ValueMapper(&cli.Run.ParetoV, &generate.RelationshipFloat{}),
 		kong.Vars{
 			"version":        buildInfo,
 			"SequentialFlag": generate.SequentialFlag,

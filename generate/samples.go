@@ -259,7 +259,7 @@ func (s *DBRandomSample) Sample() error {
 func NewDBRandomSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, tableSize int64, fkCli *ForeignKeyLinks) Sampler {
 	s := &DBRandomSample{}
 	s.Init(fields, schema, tablename, constraintName, values, tableSize, fkCli)
-	s.coinFlipPercent = s.guardedCoinFlipPercent(fkCli.CoinFlipPercent)
+	s.coinFlipPercent = s.guardedCoinFlipPercent(fkCli.CoinFlipPercent.For(tablename))
 	return s
 }
 
@@ -351,14 +351,14 @@ func NewBoxMullerSample(fields []db.Field, schema, tablename, constraintName str
 	// the parent's size. Taken from --rows, the size of the table being
 	// filled, the mean of a small parent landed outside it and every draw had
 	// to be redrawn.
-	s.stddev = fkCli.NormalStddev
+	s.stddev = fkCli.NormalStddev.For(tablename)
 	if s.stddev == 0 {
 		s.stddev = float64(tableSize) / 10
 		logOnce("normalStddev:"+s.relationshipKey(), func() {
 			log.Info().Str("parent", tablename).Int64("parentRows", tableSize).Msgf("setting --normal-stddev to %.2f for %s (its row count / 10) by default", s.stddev, tablename)
 		})
 	}
-	s.mean = fkCli.NormalMean
+	s.mean = fkCli.NormalMean.For(tablename)
 	if s.mean == 0 {
 		s.mean = float64(tableSize) / 2
 		logOnce("normalMean:"+s.relationshipKey(), func() {
@@ -395,7 +395,7 @@ func (s *ZipfSample) Sample() error {
 func NewZipfSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, tableSize int64, fkCli *ForeignKeyLinks) Sampler {
 	s := &ZipfSample{}
 	s.Init(fields, schema, tablename, constraintName, values, tableSize, fkCli)
-	s.zipfRand = rand.NewZipf(rand.New(rand.NewSource(time.Now().UnixNano())), fkCli.ParetoS, fkCli.ParetoV, uint64(tableSize))
+	s.zipfRand = rand.NewZipf(rand.New(rand.NewSource(time.Now().UnixNano())), fkCli.ParetoS.For(tablename), fkCli.ParetoV.For(tablename), uint64(tableSize))
 
 	return s
 }

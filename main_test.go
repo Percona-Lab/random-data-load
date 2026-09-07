@@ -229,6 +229,21 @@ func TestRun(t *testing.T) {
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=binomial", "--coin-flip-percent=60"}},
 		},
 		{
+			// The tuning of every sampler can be given per parent table, which
+			// is the only way a run touching several relationships can satisfy
+			// them all at once. Routing it wrongly is visible here: over a
+			// 1000-row parent the default mean is row 500, so a mean of 50
+			// landing where it was asked for keeps every sampled id low.
+			name:       "fk_normal_per_parent",
+			checkQuery: "select (count(*) = 200) and (max(t1_id) < 200) and (count(distinct t1_id) > 1) from t2;",
+			engines:    []string{"pg", "mysql"},
+			cmds: [][]string{
+				[]string{"--rows=1000", "--table=t1"},
+				[]string{"--rows=200", "--table=t2", "--default-relationship=normal", "--normal-mean=t1=50", "--normal-stddev=t1=5", "--null-freq=0"},
+			},
+		},
+
+		{
 			name:       "fk_pareto",
 			checkQuery: "select count(distinct t1.id) between 1 and 99 from t1 join t2 on t1.id = t2.t1_id;",
 			engines:    []string{"pg", "mysql"},
