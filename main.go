@@ -36,6 +36,8 @@ var cli struct {
 
 	ExportStat cmd.ExportStatCmd `cmd:"export-stat" help:"Print the command exporting the column statistics a --query needs, to be replayed with 'run --stat-file'"`
 
+	ExplainStat cmd.ExplainStatCmd `cmd:"explain-stat" help:"Read a reported EXPLAIN and print the row counts, page counts, selectivities and distinct counts it implies, as flags for 'run'"`
+
 	Version     kong.VersionFlag
 	Profile     bool   `name:"pprof" help:"generate pprof trace at --cpu-prof-path. Also opens port 6060 for pprof go tool"`
 	CPUProfPath string `name:"cpu-prof-path" default:"cpu.prof"`

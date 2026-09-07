@@ -1,0 +1,74 @@
+                                                                                                   QUERY PLAN                                                                                                   
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=15120.06..15120.11 rows=20 width=51) (actual time=82.615..90.260 rows=20 loops=1)
+   Buffers: shared hit=4326 read=14463 written=5836
+   ->  Sort  (cost=15120.06..15120.86 rows=320 width=51) (actual time=82.613..90.254 rows=20 loops=1)
+         Sort Key: (sum(((oi.qty)::numeric * oi.unit_price))) DESC
+         Sort Method: top-N heapsort  Memory: 27kB
+         Buffers: shared hit=4326 read=14463 written=5836
+         ->  Finalize GroupAggregate  (cost=15031.79..15111.54 rows=320 width=51) (actual time=81.381..90.018 rows=255 loops=1)
+               Group Key: s.country, c.name
+               Buffers: shared hit=4323 read=14463 written=5836
+               ->  Gather Merge  (cost=15031.79..15100.92 rows=530 width=51) (actual time=81.352..89.520 rows=417 loops=1)
+                     Workers Planned: 2
+                     Workers Launched: 2
+                     Buffers: shared hit=4323 read=14463 written=5836
+                     ->  Partial GroupAggregate  (cost=14031.77..14039.72 rows=265 width=51) (actual time=75.190..75.452 rows=139 loops=3)
+                           Group Key: s.country, c.name
+                           Buffers: shared hit=4323 read=14463 written=5836
+                           ->  Sort  (cost=14031.77..14032.43 rows=265 width=21) (actual time=75.168..75.194 rows=202 loops=3)
+                                 Sort Key: s.country, c.name
+                                 Sort Method: quicksort  Memory: 34kB
+                                 Buffers: shared hit=4323 read=14463 written=5836
+                                 Worker 0:  Sort Method: quicksort  Memory: 35kB
+                                 Worker 1:  Sort Method: quicksort  Memory: 29kB
+                                 ->  Nested Loop  (cost=4405.09..14021.10 rows=265 width=21) (actual time=24.540..74.744 rows=202 loops=3)
+                                       Buffers: shared hit=4307 read=14463 written=5836
+                                       ->  Nested Loop  (cost=4404.80..13931.04 rows=265 width=22) (actual time=24.493..71.133 rows=202 loops=3)
+                                             Buffers: shared hit=3187 read=13760 written=5523
+                                             ->  Nested Loop  (cost=4404.51..13841.63 rows=265 width=18) (actual time=24.438..67.449 rows=202 loops=3)
+                                                   Buffers: shared hit=2102 read=13022 written=5196
+                                                   ->  Nested Loop  (cost=4404.08..13709.37 rows=288 width=18) (actual time=24.375..62.552 rows=220 loops=3)
+                                                         Buffers: shared hit=466 read=12012 written=4709
+                                                         ->  Parallel Hash Join  (cost=4403.66..12577.94 rows=95 width=8) (actual time=24.298..58.586 rows=73 loops=3)
+                                                               Hash Cond: (o.customer_id = cu.customer_id)
+                                                               Buffers: shared hit=30 read=11131 written=4302
+                                                               ->  Parallel Bitmap Heap Scan on orders o  (cost=214.69..8383.96 rows=1910 width=16) (actual time=5.325..39.633 rows=1519 loops=3)
+                                                                     Recheck Cond: ((status)::text = 'cancelled'::text)
+                                                                     Filter: (placed_at >= '2026-06-09 00:00:00+00'::timestamp with time zone)
+                                                                     Rows Removed by Filter: 5196
+                                                                     Heap Blocks: exact=2993
+                                                                     Buffers: shared read=7446 written=3530
+                                                                     ->  Bitmap Index Scan on orders_status_idx  (cost=0.00..213.55 rows=19883 width=0) (actual time=3.227..3.227 rows=20143 loops=1)
+                                                                           Index Cond: ((status)::text = 'cancelled'::text)
+                                                                           Buffers: shared read=18 written=4
+                                                               ->  Parallel Hash  (cost=4136.88..4136.88 rows=4167 width=8) (actual time=17.805..17.806 rows=3339 loops=3)
+                                                                     Buckets: 16384  Batches: 1  Memory Usage: 544kB
+                                                                     Buffers: shared read=3685 written=772
+                                                                     ->  Parallel Bitmap Heap Scan on customers cu  (cost=109.80..4136.88 rows=4167 width=8) (actual time=0.681..16.527 rows=3339 loops=3)
+                                                                           Recheck Cond: ((segment)::text = 'enterprise'::text)
+                                                                           Heap Blocks: exact=1800
+                                                                           Buffers: shared read=3685 written=772
+                                                                           ->  Bitmap Index Scan on customers_segment_idx  (cost=0.00..107.30 rows=10000 width=0) (actual time=1.056..1.056 rows=10018 loops=1)
+                                                                                 Index Cond: ((segment)::text = 'enterprise'::text)
+                                                                                 Buffers: shared read=9
+                                                         ->  Index Scan using order_items_order_idx on order_items oi  (cost=0.43..11.88 rows=3 width=26) (actual time=0.028..0.052 rows=3 loops=218)
+                                                               Index Cond: (order_id = o.order_id)
+                                                               Buffers: shared hit=436 read=881 written=407
+                                                   ->  Index Scan using products_pkey on products p  (cost=0.42..0.46 rows=1 width=16) (actual time=0.021..0.021 rows=1 loops=661)
+                                                         Index Cond: (product_id = oi.product_id)
+                                                         Filter: (NOT is_discontinued)
+                                                         Rows Removed by Filter: 0
+                                                         Buffers: shared hit=1636 read=1010 written=487
+                                             ->  Index Scan using categories_pkey on categories c  (cost=0.29..0.34 rows=1 width=12) (actual time=0.017..0.017 rows=1 loops=607)
+                                                   Index Cond: (category_id = p.category_id)
+                                                   Buffers: shared hit=1085 read=738 written=327
+                                       ->  Index Scan using suppliers_pkey on suppliers s  (cost=0.29..0.34 rows=1 width=7) (actual time=0.017..0.017 rows=1 loops=607)
+                                             Index Cond: (supplier_id = p.supplier_id)
+                                             Buffers: shared hit=1120 read=703 written=313
+ Planning:
+   Buffers: shared hit=632 read=47
+ Planning Time: 5.312 ms
+ Execution Time: 90.609 ms
+(70 rows)
+

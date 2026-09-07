@@ -1,0 +1,40 @@
+                                                                           QUERY PLAN                                                                            
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=2288.39..2288.41 rows=8 width=43) (actual time=11.443..11.448 rows=8 loops=1)
+   Buffers: shared hit=2835
+   ->  Sort  (cost=2288.39..2288.41 rows=8 width=43) (actual time=11.440..11.444 rows=8 loops=1)
+         Sort Key: (sum((oi.qty * oi.unit_cents))) DESC
+         Sort Method: quicksort  Memory: 25kB
+         Buffers: shared hit=2835
+         ->  HashAggregate  (cost=2288.17..2288.27 rows=8 width=43) (actual time=11.407..11.413 rows=8 loops=1)
+               Group Key: c.country
+               Batches: 1  Memory Usage: 24kB
+               Buffers: shared hit=2832
+               ->  Nested Loop  (cost=170.92..2279.31 rows=886 width=15) (actual time=1.197..11.056 rows=934 loops=1)
+                     Buffers: shared hit=2832
+                     ->  Hash Join  (cost=170.49..1256.40 rows=268 width=11) (actual time=1.182..5.417 rows=283 loops=1)
+                           Hash Cond: (o.customer_id = c.customer_id)
+                           Buffers: shared hit=1049
+                           ->  Bitmap Heap Scan on orders o  (cost=59.69..1132.24 rows=5084 width=12) (actual time=0.597..4.084 rows=4872 loops=1)
+                                 Recheck Cond: ((status)::text = 'cancelled'::text)
+                                 Heap Blocks: exact=999
+                                 Buffers: shared hit=1004
+                                 ->  Bitmap Index Scan on orders_status_idx  (cost=0.00..58.42 rows=5084 width=0) (actual time=0.392..0.392 rows=4872 loops=1)
+                                       Index Cond: ((status)::text = 'cancelled'::text)
+                                       Buffers: shared hit=5
+                           ->  Hash  (cost=107.50..107.50 rows=264 width=7) (actual time=0.570..0.571 rows=264 loops=1)
+                                 Buckets: 1024  Batches: 1  Memory Usage: 19kB
+                                 Buffers: shared hit=45
+                                 ->  Seq Scan on customers c  (cost=0.00..107.50 rows=264 width=7) (actual time=0.013..0.522 rows=264 loops=1)
+                                       Filter: ((segment)::text = 'enterprise'::text)
+                                       Rows Removed by Filter: 4736
+                                       Buffers: shared hit=45
+                     ->  Index Scan using order_items_order_idx on order_items oi  (cost=0.42..3.78 rows=4 width=20) (actual time=0.010..0.019 rows=3 loops=283)
+                           Index Cond: (order_id = o.order_id)
+                           Buffers: shared hit=1783
+ Planning:
+   Buffers: shared hit=440
+ Planning Time: 1.591 ms
+ Execution Time: 11.612 ms
+(36 rows)
+
