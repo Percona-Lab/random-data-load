@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Percona-Lab/random-data-load/db"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
-	"github.com/ylacancellera/random-data-load/db"
 )
 
 // maxNormalDraws caps how many row numbers the normal law is asked for before

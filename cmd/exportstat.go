@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Percona-Lab/random-data-load/query"
 	"github.com/pkg/errors"
-	"github.com/ylacancellera/random-data-load/query"
 )
 
 // ExportStatCmd prints a command, it does not run one. The statistics worth

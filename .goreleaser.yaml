@@ -12,6 +12,11 @@ builds:
     goos:
       - linux
       - darwin
+    ldflags:
+      - -s -w
+      - -X main.Version={{ .Tag }}
+      - -X main.Commit={{ .Commit }}
+      - -X main.Build={{ .Date }}
 
 archives:
   - format: tar.gz

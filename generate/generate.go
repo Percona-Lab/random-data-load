@@ -12,8 +12,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 
-	"github.com/ylacancellera/random-data-load/db"
-	"github.com/ylacancellera/random-data-load/frequency"
+	"github.com/Percona-Lab/random-data-load/db"
+	"github.com/Percona-Lab/random-data-load/frequency"
 )
 
 type Insert struct {

@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Percona-Lab/random-data-load/db"
+	"github.com/Percona-Lab/random-data-load/frequency"
+	"github.com/Percona-Lab/random-data-load/generate"
+	"github.com/Percona-Lab/random-data-load/query"
 	"github.com/apoorvam/goterminal"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
-	"github.com/ylacancellera/random-data-load/db"
-	"github.com/ylacancellera/random-data-load/frequency"
-	"github.com/ylacancellera/random-data-load/generate"
-	"github.com/ylacancellera/random-data-load/query"
 )
 
 type RunCmd struct {

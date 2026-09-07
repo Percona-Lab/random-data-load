@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/ylacancellera/random-data-load/query"
+	"github.com/Percona-Lab/random-data-load/query"
 )
 
 type QueryCmd struct {

@@ -8,13 +8,13 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
+	"github.com/Percona-Lab/random-data-load/cmd"
+	"github.com/Percona-Lab/random-data-load/frequency"
+	"github.com/Percona-Lab/random-data-load/generate"
+	"github.com/Percona-Lab/random-data-load/query"
 	"github.com/alecthomas/kong"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"github.com/ylacancellera/random-data-load/cmd"
-	"github.com/ylacancellera/random-data-load/frequency"
-	"github.com/ylacancellera/random-data-load/generate"
-	"github.com/ylacancellera/random-data-load/query"
 )
 
 const (

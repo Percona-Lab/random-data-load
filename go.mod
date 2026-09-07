@@ -1,4 +1,4 @@
-module github.com/ylacancellera/random-data-load
+module github.com/Percona-Lab/random-data-load
 
 go 1.25.0
 

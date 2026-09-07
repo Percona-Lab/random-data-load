@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ylacancellera/random-data-load/db"
+	"github.com/Percona-Lab/random-data-load/db"
 )
 
 // The Scanned* getters read a parent row and hand its value back verbatim to

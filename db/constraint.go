@@ -5,10 +5,10 @@ import (
 
 	"slices"
 
+	"github.com/Percona-Lab/random-data-load/query"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
-	"github.com/ylacancellera/random-data-load/query"
 )
 
 // Constraint holds Foreign Keys information
