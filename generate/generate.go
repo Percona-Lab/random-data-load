@@ -343,7 +343,7 @@ func (in *Insert) generateFieldsRow(fields []db.Field, insertValues []Getter) {
 			}
 			gw.Assign(NewRandomInt(maxValue))
 		case "float", "decimal", "double", "numeric":
-			gw.Assign(NewRandomDecimal(field.NumericPrecision.Int64, field.NumericScale.Int64))
+			gw.Assign(NewRandomDecimal(field.NumericPrecision, field.NumericScale))
 		case "date", "datetime", "timestamp":
 			gw.Assign(NewRandomDate(in.minGeneratedTime, in.maxGeneratedTime))
 		case "time":

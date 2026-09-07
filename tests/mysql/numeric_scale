@@ -1,0 +1,5 @@
+CREATE TABLE t1(
+	c1 numeric(5,2) NOT NULL,
+	c2 numeric(12,2),
+	c3 numeric(3,2) NOT NULL
+);

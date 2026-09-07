@@ -73,6 +73,9 @@ func NewRandomString(name string, maxSize int64) *RandomString {
 		fn = gofakeit.City
 	case countryRe.MatchString(name):
 		fn = gofakeit.Country
+		if maxSize > 0 && maxSize < 4 {
+			fn = gofakeit.CountryAbr
+		}
 	case ipAddressRe.MatchString(name):
 		fn = gofakeit.IPv4Address
 	case addressRe.MatchString(name):
@@ -97,12 +100,31 @@ func NewRandomString(name string, maxSize int64) *RandomString {
 		}
 	}
 
-	s := fn()
-	if len(s) > int(maxSize) {
-		s = s[:int(maxSize)]
-	}
+	s := truncateRunes(fn(), maxSize)
 	// quick and dirty fix to avoid breaking sql
 	// using ? placeholders would be better
 	s = strings.Replace(s, "'", "", -1)
 	return &RandomString{s}
+}
+
+// truncateRunes cuts a string down to max characters without splitting a
+// multi-byte one.
+//
+// Slicing by byte does split one, and the database refuses the whole batch
+// rather than the row: a country name cut to the two bytes a char(2) column
+// holds ends halfway through an "Å", and postgres answers "invalid byte
+// sequence for encoding UTF8". Column widths count characters on both engines,
+// so characters is also the right unit to cut on.
+func truncateRunes(s string, max int64) string {
+	if max <= 0 || int64(len(s)) <= max {
+		return s
+	}
+	count := int64(0)
+	for i := range s {
+		if count == max {
+			return s[:i]
+		}
+		count++
+	}
+	return s
 }

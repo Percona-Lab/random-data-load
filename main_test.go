@@ -187,6 +187,27 @@ func TestRun(t *testing.T) {
 		},
 
 		{
+			// postgres reports char(n) as "character" and a bare time as "time
+			// without time zone". Neither used to be mapped, so both columns
+			// were left out of the INSERT and the NOT NULL ones failed the run.
+			name:       "char_types",
+			checkQuery: "select (count(*) = 100) and (count(c1) = 100) and (count(c3) = 100) from t1;",
+			engines:    []string{"pg"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
+		},
+
+		{
+			// numeric(p,s) holds p digits with s after the point, so a
+			// numeric(5,2) tops out at 999.99. The precision used to be read as
+			// a magnitude, which put the draw in range of 99999 and had the
+			// insert rejected.
+			name:       "numeric_scale",
+			checkQuery: "select (count(*) = 100) and (max(c1) < 1000) and (max(c3) < 10) and (count(c1) = 100) from t1;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1", "--null-freq=0"}},
+		},
+
+		{
 			name:       "timestamp",
 			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN c1 between '2015-07-02' and '2020-09-08' THEN 1 ELSE 0 END) = 100) from t1;",
 			engines:    []string{"pg", "mysql"},
