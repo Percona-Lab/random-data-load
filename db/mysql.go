@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"net"
@@ -186,6 +187,41 @@ func (_ MySQL) GetConstraints(schema, tableName string) ([]*Constraint, error) {
 	}
 
 	return constraints, nil
+}
+
+// TruncateTables empties the tables one at a time, innermost first.
+//
+// mysql has no multi-table TRUNCATE and refuses to truncate a table a foreign
+// key points at, so the checks are held off for the batch. They are restored
+// on the same connection they were disabled on, since the setting is per
+// session and the pool hands out connections freely.
+func (mysql MySQL) TruncateTables(tables []*Table) error {
+	ctx := context.Background()
+	conn, err := DB.Conn(ctx)
+	if err != nil {
+		return errors.Wrap(err, "truncating: taking a connection")
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=0"); err != nil {
+		return errors.Wrap(err, "truncating: disabling foreign key checks")
+	}
+	defer func() {
+		if _, err := conn.ExecContext(ctx, "SET FOREIGN_KEY_CHECKS=1"); err != nil {
+			log.Error().Err(err).Msg("could not restore foreign_key_checks on the truncating connection")
+		}
+	}()
+
+	// children first, so the order still reads correctly to anyone watching
+	for i := len(tables) - 1; i >= 0; i-- {
+		name := mysql.Escape(tables[i].Schema) + "." + mysql.Escape(tables[i].Name)
+		query := "TRUNCATE TABLE " + name
+		log.Debug().Str("query", query).Msg("emptying the tables this run fills")
+		if _, err := conn.ExecContext(ctx, query); err != nil {
+			return errors.Wrapf(err, "truncating %s", name)
+		}
+	}
+	return nil
 }
 
 func (_ MySQL) InsertTemplate() string {

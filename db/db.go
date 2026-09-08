@@ -35,6 +35,7 @@ type Engine interface {
 	FilterOnRowNumberFromClause([]Field, string, string) string
 	FilterOnRowNumberVarClause() string
 	ValueTimeLayout() string
+	TruncateTables([]*Table) error
 }
 
 var ErrFieldsNotFound = errors.New("fields not found")
@@ -71,6 +72,18 @@ func GetConstraints(schema, table string) ([]*Constraint, error) {
 
 func InsertTemplate() string {
 	return engine.InsertTemplate()
+}
+
+// TruncateTables empties the tables a run is about to fill.
+//
+// Nothing here drops a row of a table the run was not going to write to: the
+// foreign keys pointing in from outside the set are what makes that refuse
+// rather than cascade, which is the answer worth having.
+func TruncateTables(tables []*Table) error {
+	if len(tables) == 0 {
+		return nil
+	}
+	return engine.TruncateTables(tables)
 }
 
 func Escape(s string) string {

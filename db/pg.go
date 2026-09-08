@@ -160,6 +160,26 @@ ORDER BY con.conname;
 
 	return constraints, nil
 }
+
+// TruncateTables empties every table in one statement, which is what lets
+// postgres accept a set holding foreign keys pointing between its own members.
+//
+// CASCADE is deliberately not used: it would empty tables outside the set
+// without saying so. A key pointing in from a table this run does not fill is
+// a real obstacle, and the error naming it is more useful than silently
+// deleting somebody's rows.
+func (postgres Postgres) TruncateTables(tables []*Table) error {
+	names := make([]string, 0, len(tables))
+	for _, table := range tables {
+		names = append(names, postgres.Escape(table.Schema)+"."+postgres.Escape(table.Name))
+	}
+
+	query := "TRUNCATE TABLE " + strings.Join(names, ", ") + " RESTART IDENTITY"
+	log.Debug().Str("query", query).Msg("emptying the tables this run fills")
+	_, err := DB.Exec(query)
+	return errors.Wrapf(err, "truncating %s", strings.Join(names, ", "))
+}
+
 func (_ Postgres) InsertTemplate() string {
 	return "INSERT INTO %s.%s (%s) VALUES \n"
 }

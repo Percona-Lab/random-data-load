@@ -25,6 +25,7 @@ type RunCmd struct {
 	RowsPerTable     map[string]int64 `name:"rows-per-table" help:"Number of rows to insert per-table. Will have priority over --rows. Format is \"{table}=X\"" default:""`
 	BulkSize         int64            `name:"bulk-size" help:"Number of rows per insert statement" default:"1000"`
 	DryRun           bool             `name:"dry-run" help:"Print queries to the standard output instead of inserting them into the db"`
+	Truncate         bool             `name:"truncate" help:"Empty the tables this run fills before inserting into them. Without it a second run adds to what the first one left, which is rarely what tuning a run wants. Never touches a table this run does not fill: a foreign key pointing in from outside makes it refuse rather than cascade."`
 	Quiet            bool             `name:"quiet" help:"Do not print progress bar"`
 	WorkersCount     int              `name:"workers" help:"How many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time" default:"3"`
 	MaxTextSize      int64            `help:"Limit the maximum size of long text, varchar and blob fields." default:"65535"`
@@ -179,6 +180,15 @@ func (cmd *RunCmd) Run() error {
 		return err
 	}
 
+	// Emptying comes after every check that can refuse the run, so a refusal
+	// leaves the tables as they were.
+	if cmd.Truncate && !cmd.DryRun {
+		log.Info().Strs("tables", tableNames(tablesSorted)).Msg("emptying the tables this run fills, as --truncate asks")
+		if err := db.TruncateTables(tablesSorted); err != nil {
+			return errors.Wrap(err, "--truncate")
+		}
+	}
+
 	// one at a time.
 	// Parallelizing here will complexify the foreign links, for probably not so much gain
 	for _, table := range tablesSorted {
@@ -193,6 +203,14 @@ func (cmd *RunCmd) Run() error {
 	}
 
 	return err
+}
+
+func tableNames(tables []*db.Table) []string {
+	names := make([]string, 0, len(tables))
+	for _, table := range tables {
+		names = append(names, table.FullName())
+	}
+	return names
 }
 
 // reportUnsupportedFields says out loud which columns this run cannot fill,

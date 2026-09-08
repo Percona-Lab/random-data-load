@@ -301,6 +301,31 @@ func TestRun(t *testing.T) {
 		},
 
 		{
+			// Without --truncate a second run adds to what the first left, so
+			// the count here would be 200.
+			name:       "truncate",
+			checkQuery: "select count(*) = 100 from t1;",
+			engines:    []string{"pg", "mysql"},
+			cmds: [][]string{
+				[]string{"--rows=100", "--table=t1"},
+				[]string{"--rows=100", "--table=t1", "--truncate"},
+			},
+		},
+
+		{
+			// Emptying a set of tables that point at each other: postgres needs
+			// them in one statement, mysql needs its key checks held off.
+			name:       "truncate_fk",
+			checkQuery: "select (select count(*) from t1) = 100 and (select count(*) from t2) = 100;",
+			inputQuery: "select t1.id, t2.id from t1 join t2 on t1.id = t2.t1_id;",
+			engines:    []string{"pg", "mysql"},
+			cmds: [][]string{
+				[]string{"--rows=100"},
+				[]string{"--rows=100", "--truncate"},
+			},
+		},
+
+		{
 			name:       "basic_query",
 			checkQuery: "select (count(*) = 100) and (sum(CASE WHEN c2 IS NULL THEN 1 ELSE 0 END) = 100)  from t1 where c1 is not null;",
 			inputQuery: "select c1 from t1;",
