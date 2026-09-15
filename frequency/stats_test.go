@@ -16,7 +16,15 @@ func TestMain(m *testing.M) {
 
 // sameTable resolves every dumped column onto itself, which is what a run whose
 // destination table carries the source's name and columns ends up doing.
-func sameTable(cs ColumnStats) (string, string, bool) { return cs.Tablename, cs.Attname, true }
+func sameTable(cs ColumnStats) (Target, bool) {
+	return Target{Table: cs.Tablename, Column: cs.Attname}, true
+}
+
+// foreignKey resolves every dumped column onto itself and calls it a key, the
+// way a run does for a column its foreign keys cover.
+func foreignKey(cs ColumnStats) (Target, bool) {
+	return Target{Table: cs.Tablename, Column: cs.Attname, ForeignKey: true}, true
+}
 
 func TestParseStats(t *testing.T) {
 	tests := []struct {
@@ -163,7 +171,7 @@ func TestMergeStats(t *testing.T) {
 		{
 			name:     "a column the run does not insert into is skipped",
 			stats:    []ColumnStats{{Tablename: "other", Attname: "c1", NullFrac: 0.9, MostCommonVals: []string{"a"}, MostCommonFreqs: []float64{0.5}}},
-			resolve:  func(cs ColumnStats) (string, string, bool) { return "", "", false },
+			resolve:  func(cs ColumnStats) (Target, bool) { return Target{}, false },
 			wantNull: 0,
 		},
 		{
@@ -171,8 +179,8 @@ func TestMergeStats(t *testing.T) {
 			// spelling, so the caller settles the naming
 			name:  "the resolver decides which table and column the dump lands on",
 			stats: []ColumnStats{{Tablename: "T1", Attname: "C1", NullFrac: 0.4}},
-			resolve: func(cs ColumnStats) (string, string, bool) {
-				return strings.ToLower(cs.Tablename), strings.ToLower(cs.Attname), true
+			resolve: func(cs ColumnStats) (Target, bool) {
+				return Target{Table: strings.ToLower(cs.Tablename), Column: strings.ToLower(cs.Attname)}, true
 			},
 			wantNull: 0.4,
 		},

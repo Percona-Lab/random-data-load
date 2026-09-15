@@ -485,6 +485,12 @@ func (in *Insert) sampleConstraints(constraints db.Constraints, values [][]Gette
 
 		samplerInit := in.fklinks.relationship(constraint.ReferencedTableName, in.table.Name)
 		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlices[constraint], parentSize, &in.fklinks)
+
+		// An imported dump may say how skewed this key was, which no sampler
+		// knows about: it is a property of the relationship rather than of the
+		// distribution the caller asked for, so it is layered on top.
+		sampler = newSkewedSample(sampler, constraint, subSlices[constraint], parentSize, in.keyFrequenciesFor(constraint), &in.fklinks)
+
 		if err := sampler.Sample(); err != nil {
 			return errors.Wrap(err, "sampleFieldsTable")
 		}

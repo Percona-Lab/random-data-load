@@ -416,6 +416,16 @@ A few things worth knowing:
   column values, though, so it is production data and should be treated as such
 - values are matched to a table and a column of the run, case-insensitively. Anything
   the run does not insert into is ignored
+- **a foreign key column keeps its skew, not its values.** `most_common_vals` for such a
+  column holds the source database's own parent ids, and this run's parent was filled
+  with ids of its own making, so inserting them would point the key at rows that do not
+  exist. The frequencies beside them are kept instead, and reproduced by pointing that
+  share of the child's rows at one parent row each — which is the figure that matters,
+  since postgres reads `most_common_freqs[1]` of the inner join column to size a hash
+  join's build side. The share is reduced by what the relationship's own sampling
+  contributes on its own, so the result lands on what was measured rather than above it.
+  Only single-column keys: the common values of one column of a composite key say how
+  often that column repeats, not how often the pair does
 - `--null-freq-map`, `--values-freq-map` and the literals taken from `--query` win.
   A value they already give a frequency to keeps it, and is not counted twice
 - a column postgres recorded no NULL for gets none, rather than falling back to
@@ -684,6 +694,7 @@ Without clear plan:
 - `run --target-bytes-per-row` and `run --target-relpages` aim a table at a row width or a page count, distributing the difference over the columns holding free text, so a load-measure-adjust cycle becomes one flag
 - a unique key whose columns come from several foreign keys is filled from all of them at once, walking the combinations their parents can make, instead of each key walking its own parent and the pair repeating as soon as the shortest walk came round; asking for more rows than those parents can make combinations is refused up front
 - a run whose tables point foreign keys at tables it does not fill is refused before anything is written, in one message naming the whole closure, instead of failing part way through with some tables already loaded; `--fill-fk-parents` adds those tables to the run instead
+- `--stat-file` no longer tries to insert the source database's parent ids into a foreign key column, which pointed it at rows that do not exist; the key's measured skew is reproduced instead, by sampling that share of the child's rows from one parent row each
 
 #### 0.2.3
 - NULL and/or fixed values can be injected at tunable rates

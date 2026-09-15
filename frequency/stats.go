@@ -27,11 +27,21 @@ type ColumnStats struct {
 	MostCommonFreqs []float64 `json:"most_common_freqs"`
 }
 
-// Resolver maps a dumped column onto a table and column of the current run,
-// returning false when the dump mentions something this run does not touch. It
-// exists so that this package does not need to know about the database
-// catalog: the caller owns the loaded tables and settles naming and case.
-type Resolver func(ColumnStats) (table, column string, ok bool)
+// Target is where a dumped column lands in the current run.
+type Target struct {
+	Table, Column string
+
+	// ForeignKey marks a column whose values are sampled from a parent rather
+	// than generated. What the dump holds for it cannot be reused as-is.
+	ForeignKey bool
+}
+
+// Resolver maps a dumped column onto a column of the current run, returning
+// false when the dump mentions something this run does not touch. It exists so
+// that this package does not need to know about the database catalog: the
+// caller owns the loaded tables and settles naming, case, and which columns
+// are keys.
+type Resolver func(ColumnStats) (Target, bool)
 
 var ErrMalformedStats = errors.New("malformed statistics export, expected the JSON array produced by the `export-stat` subcommand")
 
@@ -71,24 +81,66 @@ func ParseStats(r io.Reader) ([]ColumnStats, error) {
 // deliberate, so they win over what the dump observed.
 func MergeStats(stats []ColumnStats, resolve Resolver) {
 	for _, cs := range stats {
-		table, column, ok := resolve(cs)
+		target, ok := resolve(cs)
 		if !ok {
 			log.Debug().Str("table", cs.Tablename).Str("column", cs.Attname).Msg("pg_stats dump mentions a column this run does not insert into, skipping")
 			continue
 		}
 
-		colFreqMap, ok := SharedTableFrequency[table]
+		colFreqMap, ok := SharedTableFrequency[target.Table]
 		if !ok {
 			colFreqMap = map[string]Frequency{}
 		}
-		freq := colFreqMap[column]
+		freq := colFreqMap[target.Column]
 
-		freq.mergeCommonValues(cs, table, column)
-		freq.mergeNullFraction(cs, table, column)
+		if target.ForeignKey {
+			freq.keepKeySkew(cs, target)
+		} else {
+			freq.mergeCommonValues(cs, target.Table, target.Column)
+		}
+		freq.mergeNullFraction(cs, target.Table, target.Column)
 
-		colFreqMap[column] = freq
-		SharedTableFrequency[table] = colFreqMap
+		colFreqMap[target.Column] = freq
+		SharedTableFrequency[target.Table] = colFreqMap
 	}
+}
+
+// keepKeySkew keeps how skewed a foreign key column is, and drops the values it
+// was skewed towards.
+//
+// The dump matches by table and column name, so it happily hands over the
+// most_common_vals of a foreign key: real parent ids from the source database.
+// Inserting them here points the key at rows that do not exist, since the local
+// parent was filled with ids of this run's own making, and every run of the
+// study had to strip those entries from the dump by hand or watch the sampling
+// fail.
+//
+// The frequencies are worth keeping though, and are the hardest thing in a
+// reproduction to get right: postgres reads most_common_freqs[1] of the inner
+// join column to size a hash join's build side, so join-key skew is what
+// decides which side of the join gets built. It is reproduced by sampling that
+// proportion of the child's rows from one parent row each, which needs no ids
+// to be invented.
+func (freq *Frequency) keepKeySkew(cs ColumnStats, target Target) {
+	count := min(len(cs.MostCommonVals), len(cs.MostCommonFreqs))
+	if count == 0 {
+		return
+	}
+
+	kept := make([]float64, 0, count)
+	for i := 0; i < count; i++ {
+		if cs.MostCommonFreqs[i] > 0 {
+			kept = append(kept, cs.MostCommonFreqs[i])
+		}
+	}
+	if len(kept) == 0 {
+		return
+	}
+
+	freq.KeyFrequencies = kept
+	log.Info().Str("table", target.Table).Str("column", target.Column).Int("values", len(kept)).Float64("mostCommon", kept[0]).
+		Msgf("%s.%s is a foreign key, so the values the dump holds for it are the source database's own parent ids and cannot be inserted here. Keeping how often they repeat -- %d values, the most common on %.4f of the rows -- and reproducing it by sampling that share of the rows from one parent row each",
+			target.Table, target.Column, len(kept), kept[0])
 }
 
 // mergeCommonValues appends the most common values, keeping their observed

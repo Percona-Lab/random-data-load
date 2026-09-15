@@ -132,17 +132,6 @@ func (cmd *RunCmd) Run() error {
 
 		tables = append(tables, table)
 	}
-	if cmd.StatFile != "" {
-		// After the tables are loaded, so that an exported column can be
-		// matched against the real one: the catalog reports folded names, and
-		// both the frequency map and the generator are keyed on the names it
-		// gave back.
-		if err := cmd.mergeStats(tables); err != nil {
-			return err
-		}
-		log.Debug().Interface("freq-map", frequency.SharedTableFrequency).Msg("merged exported statistics into frequency map")
-	}
-
 	// we can autocomplete foreign keys
 	joins = append(joins, cmd.AddForeignKeys...)
 	if len(joins) > 0 {
@@ -155,6 +144,19 @@ func (cmd *RunCmd) Run() error {
 	tables, err = cmd.resolveForeignKeyParents(tables)
 	if err != nil {
 		return err
+	}
+
+	if cmd.StatFile != "" {
+		// After the tables are loaded, so that an exported column can be
+		// matched against the real one: the catalog reports folded names, and
+		// both the frequency map and the generator are keyed on the names it
+		// gave back. And after the foreign keys are settled, guessed ones
+		// included, because what of the dump can be reused for a column
+		// depends on whether that column is a key.
+		if err := cmd.mergeStats(tables); err != nil {
+			return err
+		}
+		log.Debug().Interface("freq-map", frequency.SharedTableFrequency).Msg("merged exported statistics into frequency map")
 	}
 
 	// now we have the full table list and every key it will have to satisfy,
@@ -418,7 +420,7 @@ func (cmd *RunCmd) mergeStats(tables []*db.Table) error {
 		return err
 	}
 
-	frequency.MergeStats(stats, func(cs frequency.ColumnStats) (string, string, bool) {
+	frequency.MergeStats(stats, func(cs frequency.ColumnStats) (frequency.Target, bool) {
 		for _, table := range tables {
 			if !strings.EqualFold(table.Name, cs.Tablename) {
 				continue
@@ -428,11 +430,18 @@ func (cmd *RunCmd) mergeStats(tables []*db.Table) error {
 			}
 			field := table.FieldByName(cs.Attname)
 			if field == nil {
-				return "", "", false
+				return frequency.Target{}, false
 			}
-			return table.Name, field.ColumnName, true
+			// Whether the column is a key decides what of the dump can be
+			// reused for it, which is why this is settled here: the foreign
+			// keys are only all known once the guessed ones have been added.
+			return frequency.Target{
+				Table:      table.Name,
+				Column:     field.ColumnName,
+				ForeignKey: table.IsFieldInAnyConstraints(*field),
+			}, true
 		}
-		return "", "", false
+		return frequency.Target{}, false
 	})
 	return nil
 }

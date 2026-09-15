@@ -22,6 +22,14 @@ type Frequency struct {
 	IndexValues      []string  // list of values that should  end up in the column
 	IndexFrequencies []float64 // with their associated frequencies
 
+	// KeyFrequencies is how often a foreign key column repeats its most common
+	// values, without the values themselves. The values a dump holds for such
+	// a column are the source database's own parent ids and mean nothing here,
+	// but how skewed the column is means a great deal: postgres sizes a hash
+	// join's build side from the most common frequency of the join column.
+	// Reproduced by sampling the parent's rows in those proportions.
+	KeyFrequencies []float64
+
 	// Set when the entry came from a command line flag rather than from a
 	// scanned pg_stats dump, so that an explicit flag is never overwritten by
 	// what the dump happens to say.

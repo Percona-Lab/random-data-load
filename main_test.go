@@ -674,6 +674,26 @@ func TestRun(t *testing.T) {
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 
+		// tests/pg/fk_skew.json is what a dump holds for a foreign key column:
+		// most_common_vals full of the source database's own parent ids, which
+		// mean nothing here, and most_common_freqs saying how skewed the join
+		// key is, which is what a planner reads to size a hash join. The ids
+		// must not be inserted -- 881271 is not an id of this t1 -- while the
+		// shares must come out as measured: one parent row on 40% of the child
+		// rows, another on 10%, the other 98 sharing what is left.
+		{
+			name: "fk_skew",
+			checkQuery: `select (select count(*) from t2) = 50000
+				and (select count(*) from t2 where t1_id = 881271) = 0
+				and (select count(*) from (select count(*) c from t2 group by t1_id) s where c between 19000 and 21000) = 1
+				and (select count(*) from (select count(*) c from t2 group by t1_id) s where c between 4500 and 5500) = 1;`,
+			engines: []string{"pg"},
+			cmds: [][]string{
+				[]string{"--rows=100", "--table=t1"},
+				[]string{"--rows=50000", "--table=t2", "--default-relationship=sequential", "--stat-file=tests/pg/fk_skew.json"},
+			},
+		},
+
 		// Filling t3 alone needs t2, and filling t2 needs t1. Neither holds a
 		// row, so the run cannot be done as asked and is refused before
 		// anything is written. The whole closure has to be named in that one

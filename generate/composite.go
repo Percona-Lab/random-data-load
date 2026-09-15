@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 
@@ -132,79 +131,6 @@ func (s *CompositeKeySample) Sample() error {
 		}
 	}
 	return nil
-}
-
-// fillFromRowNumbers reads the parent rows sitting at these positions and
-// writes them into the values, one per row of the bulk.
-//
-// The positions repeat -- a parent that advances once every thousand rows is
-// asked for the same row a thousand times -- so they are read once each and
-// then handed to every row that wanted them. The getters are only ever read
-// from after this, so sharing one between rows is safe.
-func (p *compositeKeyPart) fillFromRowNumbers(offsets []int64) error {
-	wanted := map[int64]bool{}
-	numbers := []string{}
-	for _, offset := range offsets {
-		number := offset + 1 // ROW_NUMBER() starts at one, an OFFSET at zero
-		if wanted[number] {
-			continue
-		}
-		wanted[number] = true
-		numbers = append(numbers, strconv.FormatInt(number, 10))
-	}
-
-	rows, err := p.rowsByNumber(numbers)
-	if err != nil {
-		return err
-	}
-
-	for row, offset := range offsets {
-		values, found := rows[offset+1]
-		if !found {
-			return errors.Errorf("row %d of %s.%s was needed to fill the key of a row and did not come back, though the table was counted at %d usable rows",
-				offset+1, p.schema, p.table, p.tableSize)
-		}
-		copy(p.values[row], values)
-	}
-	return nil
-}
-
-// rowsByNumber reads the parent rows at these positions, keyed by position.
-func (p *compositeKeyPart) rowsByNumber(numbers []string) (map[int64][]Getter, error) {
-	query := fmt.Sprintf("SELECT rownumber, %s FROM %s WHERE rownumber IN (%s)",
-		db.EscapedNamesListFromFields(p.fields),
-		db.RowNumberedSubquery(p.fields, p.schema, p.table),
-		strings.Join(numbers, ","))
-
-	log.Debug().Str("query", query).Str("tablename", p.table).Str("schema", p.schema).Msg("reading parent rows by position")
-	rows, err := db.DB.Query(query)
-	if err != nil {
-		return nil, errors.Wrapf(err, "cannot read %s.%s by row number, query: %s", p.schema, p.table, query)
-	}
-	defer rows.Close()
-
-	found := map[int64][]Getter{}
-	for rows.Next() {
-		var number int64
-		scanned := make([]ScannerGetter, len(p.fields))
-		recipients := make([]interface{}, len(p.fields)+1)
-		recipients[0] = &number
-		for i, field := range p.fields {
-			scanned[i] = p.getterFromField(field)
-			recipients[i+1] = scanned[i]
-		}
-		if err := rows.Scan(recipients...); err != nil {
-			return nil, errors.Wrapf(err, "cannot read the sampled rows of %s.%s (columns %s)",
-				p.schema, p.table, db.EscapedNamesListFromFields(p.fields))
-		}
-
-		values := make([]Getter, len(p.fields))
-		for i := range p.fields {
-			values[i] = &GetterWrapper{scanned[i]}
-		}
-		found[number] = values
-	}
-	return found, errors.Wrapf(rows.Err(), "cannot read %s.%s by row number", p.schema, p.table)
 }
 
 // newCompositeKeySample builds the walk for one child table's unique key.
