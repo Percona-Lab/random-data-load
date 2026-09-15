@@ -57,46 +57,6 @@ While there: the whitelist collects raw identifiers, so it also contains table
 names (`'orders'`) and function names (`'count'`). Harmless as a filter, but it
 means the list is not really a column list.
 
-### 3. `char(n)` is refused outright
-
-**Done** in 662786b.
-
-`postgresTypeMapping` (`db/pg.go:13`) maps `character varying` to `varchar` but
-has no entry for `character`, which is what `information_schema` reports for
-`char(n)`. `isSupportedType` then rejects the column, and a `NOT NULL char(n)`
-with no default aborts the run before any insert. `time without time zone` is
-missing from the same map.
-
-A one-line entry each. `char(2)` country and currency columns are common enough
-that the study's schemas had to avoid them to measure anything else.
-
-### 4. `varchar(2)` columns named `country` produce invalid UTF-8
-
-**Done** in 7c5de6a.
-
-A short `varchar` whose name matches the country generator gets a full country
-name, which is then truncated to the column width. Truncating `Åland Islands`
-to 2 bytes splits a multi-byte sequence and postgres rejects the whole batch:
-
-```
-invalid byte sequence for encoding "UTF8": 0xc3 0x27
-```
-
-Hit on `addresses.country` and `warehouses.country` in three separate runs.
-Truncation should be rune-aware, and ideally a generator whose values do not
-fit the column should not be chosen at all.
-
-### 5. `decimal`/`numeric` ignores scale
-
-**Done** in a66a12a.
-
-`NewRandomDecimal` generates in `[0, precision)` without accounting for the
-scale, so `numeric(5,2)` — max 999.99 — receives values up to 99999 and the
-insert fails with a range error. Only `numeric(p,2)` with a large `p` is safe.
-The study's schemas had to avoid `numeric(3,2)` and `numeric(5,2)` for this
-reason. Related: a `decimal` primary key still collides, since the generated
-range ignores scale entirely.
-
 ### 6. Composite primary keys collide when the sequential walk wraps
 
 Filling `inventory(warehouse_id, product_id)` — a two-column PK sampled from
@@ -165,24 +125,6 @@ tool arm cost 1.34x and 1.54x the hand-written arm on the first two cases and
 would actually close, judged by what the sixteen runs demonstrably spent their
 turns on.
 
-### A. Read an EXPLAIN and print the statistics it implies
-
-**Done** in 10f0879.
-
-**The single largest cost, and it is paid by both arms.** Every run, with the
-tool and without it, hand-decoded the same things from the plan text: page
-counts out of sequential-scan costs, filter selectivities out of actual row
-counts, `n_distinct` out of a HashAggregate's estimate, fan-out out of an inner
-index scan's rows-per-loop, and a date window out of a filter's survival rate.
-That is arithmetic, it is identical every time, and it took several turns of
-reasoning in each of sixteen runs.
-
-A subcommand taking the target EXPLAIN and printing the implied per-table row
-counts, page counts, selectivities and distinct counts — ideally as ready-made
-`--rows-per-table` and `--values-freq-map` arguments — would remove the most
-expensive shared step in the whole workflow. It would help the hand-written
-approach too, but it is the tool that could ship it.
-
 ### B. Target a row width or a page count directly
 
 Row width decides `relpages`, `relpages` decides scan costs, and scan costs
@@ -194,19 +136,6 @@ schema first purely to shorten that loop.
 A `--target-bytes-per-row` or `--target-relpages` per table, with the filler
 distributed across the free-text columns, would replace an entire
 load-measure-adjust cycle with one flag.
-
-### C. Make `--coin-flip-percent` per relationship
-
-**Done** in 3a2224d.
-
-It is global, but the right value is a function of one parent's row count and
-the bulk size, so a run touching several relationships cannot satisfy them at
-once. Every multi-table run worked around this by splitting into one `--table=`
-invocation per table, each with its own value — which also means re-deriving
-the ratio for each one and writing a much longer repro script.
-
-`--coin-flip-percent=orders=3,products=5` in the style of the existing
-`--rows-per-table` would collapse those runs back into one.
 
 ### D. Verify a load against the target
 
@@ -232,16 +161,6 @@ heavily here too, one of them resorting to gaussian displacement and patching
 
 A per-relationship `--correlated` / `--scattered` choice would make this
 reachable instead of accidental.
-
-### F. Make a run repeatable without a manual reset
-
-**Done** in b852850.
-
-There is no `TRUNCATE`, so a second run appends to the first and every
-iteration needs a manual cleanup step. Since tuning is inherently iterative —
-load, look at the plan, change one flag, reload — this tax is paid on every
-loop. A `--truncate` flag, or refusing to start against a non-empty target
-unless one is given, would remove it.
 
 ### G. Fix the bugs above, which cost a diagnose-and-retry cycle each
 
