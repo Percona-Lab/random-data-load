@@ -138,7 +138,8 @@ func TestRun(t *testing.T) {
 		engines    []string
 		tables     []string
 		cmds       [][]string
-		expectErr  string // the run has to fail, and to say this much
+		verify     []string // a "verify --strict" pass over what the run left
+		expectErr  string   // the run has to fail, and to say this much
 	}{
 		{
 			name:       "basic",
@@ -673,6 +674,28 @@ func TestRun(t *testing.T) {
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 
+		// verify reads the generated tables back and holds them against what
+		// the run was given. The statistics export is the sharpest input it
+		// takes: every null fraction and every common value's frequency in it
+		// is a figure the generated table has to land on.
+		{
+			name:    "pg_stats",
+			engines: []string{"pg"},
+			cmds:    [][]string{[]string{"--rows=100000", "--table=t1", "--stat-file=tests/pg/pg_stats.json"}},
+			verify:  []string{"--table=t1", "--rows=100000", "--stat-file=tests/pg/pg_stats.json", "--tolerance=0.1"},
+		},
+
+		// The same pass over a foreign key relationship, on both engines: row
+		// counts, page counts and the catalog's own row estimate all have to
+		// be readable, which is what needs an engine behind them.
+		{
+			name:    "fk_uniform",
+			engines: []string{"pg", "mysql"},
+			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
+			verify:  []string{"--rows=100", "--rows-per-table=t1=100;t2=100"},
+			// no --table and no --query, so the tables come from --rows-per-table
+		},
+
 		// A value pinned by hand that the query also filters on. The two used
 		// to be registered separately and drawn independently, so the
 		// selectivity asked for, 0.28, came out at 0.28 + 0.1*(1-0.28).
@@ -732,6 +755,19 @@ func TestRun(t *testing.T) {
 				}
 				if err != nil {
 					t.Fatalf("%sfailed to exec %s: %v, out: %s", errlog, toolExecutable, err, out)
+				}
+			}
+
+			// Whatever the check query asserts, the tool's own reading of the
+			// generated tables has to agree with what the run was asked for.
+			if len(test.verify) > 0 {
+				args := []string{"verify", "--engine=" + engine, "--host=127.0.0.1", "--user=dockertest", "--password=dockertest", "--database=test", "--port=" + testsdb[engine].port, "--strict"}
+				args = append(args, test.verify...)
+				errlog += toolExecutable + " " + strings.Join(args, " ") + "\n"
+
+				out, err := exec.Command(toolExecutable, args...).CombinedOutput()
+				if err != nil {
+					t.Fatalf("%sverify refused what the run generated: %v, out: %s", errlog, err, out)
 				}
 			}
 

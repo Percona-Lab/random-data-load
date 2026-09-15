@@ -409,6 +409,58 @@ A few things worth knowing:
 columns someone explicitly ran `ANALYZE TABLE ... UPDATE HISTOGRAM ON` against. On
 MySQL, set the frequencies by hand with `--null-freq-map` and `--values-freq-map`.
 
+## Checking a run against the target
+
+Loading the data is half of a reproduction; the other half is showing that what was
+loaded matches what was asked for. `verify` reads the filled database back and prints
+the two side by side:
+
+```
+random-data-load verify --engine=pg --database=shop --query="..." plan.txt \
+    --rows-per-table="customers=200000;orders=3600000" --stat-file=pg_stats.json
+```
+
+```
+Rows
+  public.customers                             reported       200000   generated       200000    +0.0%   ok
+  public.orders                                reported      3600000   generated      3600000    +0.0%   ok
+
+Pages
+  public.orders                                reported        44053   generated        44121    +0.2%   ok
+
+Selectivity
+  public.orders.status = cancelled             reported       0.0398   generated       0.0401    +0.8%   ok
+
+Value frequency
+  public.orders.status = shipped               reported       0.5055   generated       0.5061    +0.1%   ok
+
+Every figure with a target sits within 0.0500 of it.
+```
+
+It takes the same inputs the run took, so the expectations are the ones the run was
+given rather than a second set written by hand:
+
+- the target EXPLAIN, the same file `explain-stat` reads, as a positional argument. Its
+  row counts, page counts, selectivities and distinct counts become targets
+- `--stat-file`, whose `null_frac` and `most_common_freqs` become targets too.
+  `--max-common-vals` caps how many values of each column are checked
+- `--rows-per-table` and `--rows`, for the sizes a plan cannot reveal on its own
+
+A figure the reported side never gave is still printed, marked `no target`: what a run
+actually produced is worth reading on its own. `--tolerance` sets how far a figure may
+sit from its target before it is called `OFF`, and `--strict` turns any `OFF` into a
+non-zero exit status, for a script that should stop there.
+
+Two lines are printed but never fail a run. The row width compares the plan's `width=`,
+which counts only the columns that node outputs, against the catalog's, which counts
+every column of the row. The row estimate holds the counted rows against what the
+planner believes the table holds, which says whether the statistics are fresh rather
+than whether the data is right.
+
+Page and row counts come from the catalog, which holds nothing at all for a table
+filled a moment ago, so `verify` runs an `ANALYZE` first. `--no-analyze` leaves the
+statistics alone if something else already collected them.
+
 ## Skipping fields that are not relevant to the query
 When using --query, `random-data-load` will avoid generating or sampling fields that are not necessary for the query to run.
 It can be disabled with --no-skip-fields.
@@ -548,6 +600,7 @@ Without clear plan:
 - new `export-stat` subcommand, printing the command that exports those statistics for the tables and columns a `--query` uses. Only `--engine=pg` for now
 - injected values are now escaped before reaching the INSERT, so a value holding a quote no longer breaks the statement
 - `--query-param-freq=0` no longer registers the query literals at a frequency of zero, it now leaves them out entirely
+- new `verify` subcommand, reading a filled database back and printing its row counts, page counts, selectivities, distinct counts and column statistics next to the reported figures they were meant to match
 
 #### 0.2.3
 - NULL and/or fixed values can be injected at tunable rates

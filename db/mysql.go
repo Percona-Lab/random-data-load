@@ -271,3 +271,42 @@ func (_ MySQL) FilterOnRowNumberVarClause() string {
 func (_ MySQL) ValueTimeLayout() string {
 	return "2006-01-02 15:04:05.999999"
 }
+
+// Analyze recomputes the index statistics the optimizer reads.
+//
+// ANALYZE TABLE answers with a result set rather than an affected-row count,
+// so it is run as a query and drained.
+func (mysql MySQL) Analyze(schema, table string) error {
+	query := "ANALYZE TABLE " + mysql.Escape(schema) + "." + mysql.Escape(table)
+	log.Debug().Str("query", query).Msg("collecting statistics")
+	rows, err := DB.Query(query)
+	if err != nil {
+		return errors.Wrapf(err, "analyzing %s.%s", schema, table)
+	}
+	defer rows.Close()
+	for rows.Next() { //nolint
+	}
+	return errors.Wrapf(rows.Err(), "analyzing %s.%s", schema, table)
+}
+
+// TableStorage reads what information_schema says the table takes.
+//
+// InnoDB keeps no page count of its own, so it is the clustered index's size
+// divided by the page size, and every figure here is an estimate sampled from
+// a few index pages rather than a count. It is the closest mysql gets to
+// postgres' relpages, and it is worth saying that it is not the same thing.
+func (mysql MySQL) TableStorage(schema, table string) (Storage, error) {
+	query := `SELECT coalesce(DATA_LENGTH, 0) DIV @@innodb_page_size,
+		coalesce(TABLE_ROWS, 0),
+		coalesce(AVG_ROW_LENGTH, 0)
+	FROM information_schema.TABLES
+	WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`
+
+	var storage Storage
+	err := DB.QueryRow(query, schema, table).Scan(&storage.Pages, &storage.Tuples, &storage.Width)
+	if err != nil {
+		return storage, errors.Wrapf(err, "reading the storage of %s.%s", schema, table)
+	}
+	storage.Note = "InnoDB samples these figures rather than counting them, so they move between reads"
+	return storage, nil
+}

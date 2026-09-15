@@ -36,6 +36,8 @@ type Engine interface {
 	FilterOnRowNumberVarClause() string
 	ValueTimeLayout() string
 	TruncateTables([]*Table) error
+	Analyze(string, string) error
+	TableStorage(string, string) (Storage, error)
 }
 
 var ErrFieldsNotFound = errors.New("fields not found")

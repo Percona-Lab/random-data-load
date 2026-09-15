@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 
 	_ "github.com/lib/pq"
@@ -230,4 +231,47 @@ func (_ Postgres) FilterOnRowNumberVarClause() string {
 // the session's TimeZone is.
 func (_ Postgres) ValueTimeLayout() string {
 	return "2006-01-02 15:04:05.999999-07:00"
+}
+
+// Analyze collects the statistics a planner reads.
+//
+// A table filled a moment ago carries none: relpages stays 0 and reltuples -1
+// until something looks at the table, so a page count read straight after a
+// run says nothing about what was written.
+func (postgres Postgres) Analyze(schema, table string) error {
+	query := "ANALYZE " + postgres.Escape(schema) + "." + postgres.Escape(table)
+	log.Debug().Str("query", query).Msg("collecting statistics")
+	_, err := DB.Exec(query)
+	return errors.Wrapf(err, "analyzing %s.%s", schema, table)
+}
+
+// TableStorage reads what the catalog says the table takes.
+//
+// reltuples is a float and is -1 on a table nothing has analyzed yet, which is
+// reported as zero rather than as a negative row count. The width is the sum
+// of the per-column average widths postgres measured, which is the figure a
+// plan's "width=" is built from.
+func (postgres Postgres) TableStorage(schema, table string) (Storage, error) {
+	query := `SELECT c.relpages,
+		c.reltuples,
+		coalesce((SELECT sum(s.avg_width) FROM pg_stats s
+			WHERE s.schemaname = n.nspname AND s.tablename = c.relname), 0)
+	FROM pg_catalog.pg_class c
+	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	WHERE n.nspname = $1 AND c.relname = $2`
+
+	var storage Storage
+	var tuples, width float64
+	err := DB.QueryRow(query, schema, table).Scan(&storage.Pages, &tuples, &width)
+	if err != nil {
+		return storage, errors.Wrapf(err, "reading the storage of %s.%s", schema, table)
+	}
+	if tuples > 0 {
+		storage.Tuples = int64(math.Round(tuples))
+	}
+	storage.Width = int64(math.Round(width))
+	if storage.Pages == 0 && storage.Width == 0 {
+		storage.Note = "nothing has analyzed this table, so the catalog holds no figures for it"
+	}
+	return storage, nil
 }

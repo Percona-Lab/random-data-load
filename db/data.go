@@ -111,6 +111,24 @@ func LoadTable(database, tablename string) (*Table, error) {
 	return table, nil
 }
 
+// LoadTableColumns reads a table's columns and nothing else.
+//
+// LoadTable also walks the foreign keys, which loads every parent in the
+// closure and fails when one of them cannot be read. A caller that only wants
+// to know what columns a table holds -- reading back what a run generated,
+// say -- has no use for that, and no reason to be stopped by it.
+func LoadTableColumns(database, tablename string) (*Table, error) {
+	table := &Table{}
+	engine.SetTableMetadata(table, database, tablename)
+
+	var err error
+	table.Fields, err = GetFields(table.Schema, table.Name)
+	if err != nil {
+		return nil, errors.Wrapf(err, "LoadTableColumns %s.%s", database, tablename)
+	}
+	return table, nil
+}
+
 // FieldNames returns an string array with the table's field names
 func (t *Table) FieldNames() []string {
 	fields := []string{}

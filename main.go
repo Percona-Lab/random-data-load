@@ -38,6 +38,8 @@ var cli struct {
 
 	ExplainStat cmd.ExplainStatCmd `cmd:"explain-stat" help:"Read a reported EXPLAIN and print the row counts, page counts, selectivities and distinct counts it implies, as flags for 'run'"`
 
+	Verify cmd.VerifyCmd `cmd:"verify" help:"Read a filled database back and print what it holds next to what was asked for: row counts, page counts, selectivities, distinct counts and column statistics, side by side"`
+
 	Version     kong.VersionFlag
 	Profile     bool   `name:"pprof" help:"generate pprof trace at --cpu-prof-path. Also opens port 6060 for pprof go tool"`
 	CPUProfPath string `name:"cpu-prof-path" default:"cpu.prof"`
