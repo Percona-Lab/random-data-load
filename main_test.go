@@ -674,6 +674,37 @@ func TestRun(t *testing.T) {
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 
+		// A two-column primary key whose columns come from two different
+		// parents. Filled one key at a time, the pair repeats as soon as the
+		// shorter walk comes round again -- over 50 and 100 parent rows, every
+		// 100 rows -- and the primary key refuses it. Filled together, the
+		// combinations stay unique, which the primary key itself is the check
+		// for: 2000 rows landing at all means 2000 distinct pairs.
+		{
+			name:       "fk_composite_unique",
+			checkQuery: "select count(*) = 2000 from t3;",
+			engines:    []string{"pg", "mysql"},
+			cmds: [][]string{
+				[]string{"--rows=50", "--table=t1"},
+				[]string{"--rows=100", "--table=t2"},
+				[]string{"--rows=2000", "--table=t3", "--default-relationship=sequential"},
+			},
+		},
+
+		// The same key asked for more rows than its parents can make
+		// combinations. That cannot be done at all, so it is refused before
+		// the first row of the child is written rather than part way through.
+		{
+			name:    "fk_composite_unique",
+			engines: []string{"pg", "mysql"},
+			cmds: [][]string{
+				[]string{"--rows=50", "--table=t1"},
+				[]string{"--rows=100", "--table=t2"},
+				[]string{"--rows=6000", "--table=t3"},
+			},
+			expectErr: "can only be filled with 5000 different values",
+		},
+
 		// Row width decides how many rows fit in a page, page count decides
 		// scan costs, and scan costs decide the plan, so a reproduction
 		// usually has to hit a width. pg_column_size of a whole row is the
@@ -762,7 +793,7 @@ func TestRun(t *testing.T) {
 			}
 
 			// calling tool with args directly
-			for _, cmd := range test.cmds {
+			for i, cmd := range test.cmds {
 				args := []string{"run", "--engine=" + engine, "--host=127.0.0.1", "--user=dockertest", "--password=dockertest", "--database=test", "--port=" + testsdb[engine].port}
 				args = append(args, cmd...)
 
@@ -771,16 +802,24 @@ func TestRun(t *testing.T) {
 				}
 				errlog += toolExecutable + " " + strings.Join(args, " ") + "\n"
 
+				// Only the last run is the one expected to fail: a refusal
+				// often needs the tables it refuses over to be filled first,
+				// and those runs have to succeed like any other.
+				expectErr := ""
+				if i == len(test.cmds)-1 {
+					expectErr = test.expectErr
+				}
+
 				out, err := exec.Command(toolExecutable, args...).CombinedOutput()
-				if test.expectErr != "" {
+				if expectErr != "" {
 					// The run has to refuse the job rather than insert
 					// nothing and report success: a script checking $? has
 					// no other way to know.
 					if err == nil {
-						t.Fatalf("%sexpected %s to fail with %q, it succeeded. out: %s", errlog, toolExecutable, test.expectErr, out)
+						t.Fatalf("%sexpected %s to fail with %q, it succeeded. out: %s", errlog, toolExecutable, expectErr, out)
 					}
-					if !strings.Contains(string(out), test.expectErr) {
-						t.Fatalf("%sexpected the failure to mention %q, out: %s", errlog, test.expectErr, out)
+					if !strings.Contains(string(out), expectErr) {
+						t.Fatalf("%sexpected the failure to mention %q, out: %s", errlog, expectErr, out)
 					}
 					continue
 				}

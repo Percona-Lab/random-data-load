@@ -310,3 +310,17 @@ func (mysql MySQL) TableStorage(schema, table string) (Storage, error) {
 	storage.Note = "InnoDB samples these figures rather than counting them, so they move between reads"
 	return storage, nil
 }
+
+// GetUniqueKeys returns the column sets that have to stay unique.
+//
+// A unique index is the only thing mysql records, so a primary key shows up
+// here as the index named PRIMARY, which is what is wanted: what matters is
+// the set of columns that cannot repeat, not what the constraint is called.
+func (_ MySQL) GetUniqueKeys(schema, table string) ([][]string, error) {
+	query := `SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ';')
+	FROM information_schema.STATISTICS
+	WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND NON_UNIQUE = 0
+	GROUP BY INDEX_NAME`
+
+	return scanKeyColumns(query, schema, table)
+}

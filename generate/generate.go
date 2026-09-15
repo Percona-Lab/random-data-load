@@ -30,6 +30,7 @@ type Insert struct {
 	minGeneratedTime *time.Time
 	maxGeneratedTime *time.Time
 	widthTarget      *rowWidthTarget
+	rowsWanted       int64
 }
 
 type ForeignKeyLinks struct {
@@ -138,6 +139,8 @@ func (in *Insert) DryRun(count, bulksize int64) error {
 }
 
 func (in *Insert) run(count int64, bulksize int64, dryRun bool) error {
+	in.rowsWanted = count
+
 	// Before anything is written: a row width target has to know how wide a
 	// row comes out on its own before it can say what to add to it.
 	if err := in.calibrate(); err != nil {
@@ -447,14 +450,26 @@ func parentRowCount(schema, table string) (int64, error) {
 
 func (in *Insert) sampleConstraints(constraints db.Constraints, values [][]Getter) error {
 
+	// subslice stores only a few columns grouped together with the FK columns
+	subSlices := map[*db.Constraint][][]Getter{}
 	colIdx := 0
-
 	for _, constraint := range constraints {
-
-		// subslice stores only a few columns grouped together with the FK columns
 		subSlice := make([][]Getter, len(values))
 		for i := range subSlice {
 			subSlice[i] = values[i][colIdx : colIdx+len(constraint.ReferencedFields)]
+		}
+		subSlices[constraint] = subSlice
+		colIdx += len(constraint.ReferencedFields)
+	}
+
+	// The foreign keys that between them make up a unique key of this table
+	// have to be filled together, or the key repeats however well each of them
+	// behaves on its own column.
+	shared, key := in.table.ConstraintsSharingAUniqueKey(constraints)
+
+	for _, constraint := range constraints {
+		if slices.Contains(shared, constraint) {
+			continue
 		}
 
 		// Every sampler needs the size of the parent it reads from: it decides
@@ -469,13 +484,18 @@ func (in *Insert) sampleConstraints(constraints db.Constraints, values [][]Gette
 		}
 
 		samplerInit := in.fklinks.relationship(constraint.ReferencedTableName, in.table.Name)
-		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlice, parentSize, &in.fklinks)
-		err = sampler.Sample()
-		if err != nil {
+		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlices[constraint], parentSize, &in.fklinks)
+		if err := sampler.Sample(); err != nil {
 			return errors.Wrap(err, "sampleFieldsTable")
 		}
-		colIdx += len(constraint.ReferencedFields)
-
 	}
-	return nil
+
+	if len(shared) == 0 {
+		return nil
+	}
+	sampler, err := in.newCompositeKeySample(shared, key, subSlices)
+	if err != nil {
+		return err
+	}
+	return errors.Wrap(sampler.Sample(), "sampleFieldsTable")
 }

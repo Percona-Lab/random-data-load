@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -38,6 +39,7 @@ type Engine interface {
 	TruncateTables([]*Table) error
 	Analyze(string, string) error
 	TableStorage(string, string) (Storage, error)
+	GetUniqueKeys(string, string) ([][]string, error)
 }
 
 var ErrFieldsNotFound = errors.New("fields not found")
@@ -70,6 +72,36 @@ func GetFields(schema, table string) ([]Field, error) {
 
 func GetConstraints(schema, table string) ([]*Constraint, error) {
 	return engine.GetConstraints(schema, table)
+}
+
+// GetUniqueKeys returns every set of columns of a table that has to stay
+// unique, primary key included.
+func GetUniqueKeys(schema, table string) ([][]string, error) {
+	return engine.GetUniqueKeys(schema, table)
+}
+
+// scanKeyColumns reads a query returning one semicolon-joined column list per
+// key. Both catalogs are asked the same question and neither can return an
+// array a driver would read, so both aggregate into a string.
+func scanKeyColumns(query string, args ...interface{}) ([][]string, error) {
+	rows, err := DB.Query(query, args...)
+	if err != nil {
+		return nil, errors.Wrapf(err, "reading the unique keys, query: %s, args: %v", query, args)
+	}
+	defer rows.Close()
+
+	keys := [][]string{}
+	for rows.Next() {
+		var joined string
+		if err := rows.Scan(&joined); err != nil {
+			return nil, errors.Wrap(err, "reading the unique keys")
+		}
+		if joined == "" {
+			continue
+		}
+		keys = append(keys, strings.Split(joined, ";"))
+	}
+	return keys, errors.Wrap(rows.Err(), "reading the unique keys")
 }
 
 func InsertTemplate() string {
@@ -141,6 +173,34 @@ func CountRows(schema, table string) (int64, error) {
 	var count int64
 	if err := DB.QueryRow(query).Scan(&count); err != nil {
 		return 0, errors.Wrapf(err, "cannot count the rows of %s.%s", schema, table)
+	}
+	return count, nil
+}
+
+// RowNumberedSubquery wraps a table so its rows can be asked for by position.
+//
+// Both engines have window functions, so both get the same subquery. The
+// alternative on mysql, a user variable incremented as the rows go by, cannot
+// be selected and compared against in the same statement without being
+// incremented twice per row.
+//
+// Rows holding a NULL in any of the columns are left out, so the numbering is
+// dense over the rows that can actually fill a foreign key. Pair it with
+// CountNonNullRows, which counts the same set.
+func RowNumberedSubquery(fields []Field, schema, table string) string {
+	columns := EscapedNamesListFromFields(fields)
+	return fmt.Sprintf("(SELECT %s, ROW_NUMBER() OVER (ORDER BY %s) AS rownumber FROM %s.%s WHERE %s) f",
+		columns, columns, Escape(schema), Escape(table), EscapedFieldsIsNotNull(fields))
+}
+
+// CountNonNullRows counts the rows of a table that can fill a foreign key,
+// which is the rows holding no NULL in any of its columns.
+func CountNonNullRows(schema, table string, fields []Field) (int64, error) {
+	query := fmt.Sprintf("SELECT count(*) FROM %s.%s WHERE %s",
+		Escape(schema), Escape(table), EscapedFieldsIsNotNull(fields))
+	var count int64
+	if err := DB.QueryRow(query).Scan(&count); err != nil {
+		return 0, errors.Wrapf(err, "cannot count the usable rows of %s.%s", schema, table)
 	}
 	return count, nil
 }

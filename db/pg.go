@@ -275,3 +275,30 @@ func (postgres Postgres) TableStorage(schema, table string) (Storage, error) {
 	}
 	return storage, nil
 }
+
+// GetUniqueKeys returns the column sets that have to stay unique.
+//
+// information_schema.columns cannot answer this: it reports is_identity, which
+// is how a column gets its value, not whether it is a key, so a two-column
+// primary key over ordinary integers shows up there as nothing at all. Only
+// pg_index knows.
+//
+// Expression indexes and partial ones are left out. A partial index constrains
+// the rows matching its predicate rather than the table, and an expression
+// index has no column list to hand back -- pg_index stores 0 where the column
+// number would be, which would silently shorten the key.
+func (_ Postgres) GetUniqueKeys(schema, table string) ([][]string, error) {
+	query := `SELECT string_agg(a.attname, ';' ORDER BY k.ord)
+	FROM pg_catalog.pg_index i
+	JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
+	JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+	CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord)
+	JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum = k.attnum
+	WHERE i.indisunique AND i.indisvalid AND i.indpred IS NULL
+		AND 0 <> ALL (i.indkey)
+		AND k.ord <= i.indnkeyatts
+		AND n.nspname = $1 AND c.relname = $2
+	GROUP BY i.indexrelid`
+
+	return scanKeyColumns(query, schema, table)
+}

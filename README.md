@@ -272,6 +272,21 @@ Every distribution is measured against the parent table it samples, not against 
 
 An empty parent table is refused, naming it: there is nothing for a foreign key to point at, and the child rows it cannot fill are not silently left out.
 
+A unique key whose columns come from **several** foreign keys is filled from all of them
+at once. Filled one key at a time, each sampler walks its own parent and behaves
+perfectly on its own column, but the combinations they produce start repeating as soon
+as the shortest walk comes round again: `inventory(warehouse_id, product_id)` over 100
+warehouses and 4,000 products repeats a pair every 4,000 rows whatever either sampler
+does, and the primary key refuses it. Instead the run walks the cross product of those
+parents, reading each row's position like an odometer, so a combination only repeats
+once every one of them has been used. The sampling options do not apply to such a key —
+the walk is what keeps it unique — and asking for more rows than the parents can make
+combinations is refused, naming the counts, before the first row of the child is
+written.
+
+That walk reads parent rows by position with `ROW_NUMBER()`, so it needs MySQL 8.0. The
+Pareto and normal samplers below still use user variables and still work on 5.7.
+
 **1.** sequential relationships will sample with LIMIT and OFFSET:  
 ```
 SELECT <field[, field2]> FROM <referenced schema>.<referenced table> ORDER BY 1 LIMIT <--bulk-size> OFFSET y
@@ -659,6 +674,7 @@ Without clear plan:
 - `--query-param-freq=0` no longer registers the query literals at a frequency of zero, it now leaves them out entirely
 - new `verify` subcommand, reading a filled database back and printing its row counts, page counts, selectivities, distinct counts and column statistics next to the reported figures they were meant to match
 - `run --target-bytes-per-row` and `run --target-relpages` aim a table at a row width or a page count, distributing the difference over the columns holding free text, so a load-measure-adjust cycle becomes one flag
+- a unique key whose columns come from several foreign keys is filled from all of them at once, walking the combinations their parents can make, instead of each key walking its own parent and the pair repeating as soon as the shortest walk came round; asking for more rows than those parents can make combinations is refused up front
 
 #### 0.2.3
 - NULL and/or fixed values can be injected at tunable rates

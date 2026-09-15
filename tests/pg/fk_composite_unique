@@ -1,0 +1,8 @@
+CREATE TABLE t1(id int PRIMARY KEY, label text);
+CREATE TABLE t2(id int PRIMARY KEY, label text);
+CREATE TABLE t3(
+	t1_id int NOT NULL REFERENCES t1(id),
+	t2_id int NOT NULL REFERENCES t2(id),
+	qty int,
+	PRIMARY KEY (t1_id, t2_id)
+);

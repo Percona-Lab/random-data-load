@@ -18,6 +18,11 @@ type Table struct {
 	Fields []Field
 	//Indexes     map[string]Index
 	Constraints []*Constraint
+
+	// UniqueKeys holds every set of columns that has to stay unique, primary
+	// key included. Filling two of those columns from two different parents
+	// has to respect the whole key, not each column on its own.
+	UniqueKeys [][]string
 }
 
 type Field struct {
@@ -92,6 +97,11 @@ func LoadTable(database, tablename string) (*Table, error) {
 	}
 
 	table.Constraints, err = GetConstraints(table.Schema, table.Name)
+	if err != nil {
+		return nil, errors.Wrapf(err, "LoadTable %s.%s", database, tablename)
+	}
+
+	table.UniqueKeys, err = GetUniqueKeys(table.Schema, table.Name)
 	if err != nil {
 		return nil, errors.Wrapf(err, "LoadTable %s.%s", database, tablename)
 	}
@@ -220,6 +230,48 @@ func (t *Table) FieldsUnsupported() []Field {
 		fields = append(fields, field)
 	}
 	return fields
+}
+
+// ConstraintsSharingAUniqueKey returns the foreign keys that between them
+// cover one of the table's unique keys, when it takes more than one of them to.
+//
+// This is the shape that collides. A two-column primary key whose columns come
+// from two different parents is filled by two samplers that know nothing of
+// each other: each one walks its own parent, each one is perfectly well
+// behaved on its own column, and the pair they produce repeats as soon as the
+// shorter walk comes round again. Uniqueness has to hold over the whole key,
+// so the columns of that key have to be filled together.
+//
+// A key covered by a single foreign key is left alone: one sampler already
+// sees the whole key, so nothing has to be coordinated.
+func (t *Table) ConstraintsSharingAUniqueKey(candidates Constraints) (Constraints, []string) {
+	for _, key := range t.UniqueKeys {
+		covering := Constraints{}
+		for _, column := range key {
+			constraint := candidates.holding(column)
+			if constraint == nil {
+				covering = nil
+				break
+			}
+			if !slices.Contains(covering, constraint) {
+				covering = append(covering, constraint)
+			}
+		}
+		if len(covering) > 1 {
+			return covering, key
+		}
+	}
+	return nil, nil
+}
+
+// holding returns the constraint filling this column, if one of them does.
+func (cs Constraints) holding(column string) *Constraint {
+	for _, constraint := range cs {
+		if slices.ContainsFunc(constraint.ColumnsName, func(c string) bool { return strings.EqualFold(c, column) }) {
+			return constraint
+		}
+	}
+	return nil
 }
 
 func (t *Table) IsFieldInAnyConstraints(field Field) bool {
