@@ -1,0 +1,7 @@
+CREATE TABLE t1(
+	id serial primary key,
+	amount int NOT NULL,
+	label varchar(40),
+	note text,
+	tag varchar(12)
+);

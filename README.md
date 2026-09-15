@@ -409,6 +409,63 @@ A few things worth knowing:
 columns someone explicitly ran `ANALYZE TABLE ... UPDATE HISTOGRAM ON` against. On
 MySQL, set the frequencies by hand with `--null-freq-map` and `--values-freq-map`.
 
+## Aiming a table at a row width or a page count
+
+Row width decides how many rows fit in a page, page count decides what a sequential
+scan costs, and scan costs decide the plan — including whether postgres parallelises
+at all. Solving for a width by hand is a load, a measurement, an adjustment and a
+reload, and it is usually the longest loop in a reproduction.
+
+```
+random-data-load run --engine=pg --database=shop --table=orders --rows=3600000 \
+    --target-relpages=44053
+```
+
+```
+INF aiming orders at 44053 pages: 3600000 rows over 44053 pages is 96 bytes per row
+INF orders comes out at 41 bytes per row on its own; filling shipping_address=61,
+    note=1, to reach 96, which lands on 96
+```
+
+Either end of the same target can be asked for:
+
+- `--target-bytes-per-row=N` is the average width of a row's column values, the figure
+  a plan's `width=` is built from and the one `verify` reads back from the catalog
+- `--target-relpages=N` is the page count, which `--rows` and postgres' page layout
+  turn into a width. Postgres only: InnoDB organises a table by its primary key and
+  reports a size it sampled rather than counted, so the same arithmetic would not mean
+  anything there
+
+Both take a value per table, the same way the sampler tuning does:
+`--target-bytes-per-row="97;order_items=24"`.
+
+How it gets there: before the run starts, a few hundred rows are generated and measured
+to find out how wide a row comes out on its own, and the difference is written into the
+columns holding free text — `char`, `varchar`, `text` and `blob` columns this run
+generates itself. Each one's share is proportional to how wide it already is, so a table
+whose free text is one short label and one long description keeps that shape. A column
+that cannot take its share is pinned at what it holds and its remainder goes to the
+others. The target works in both directions: a table that comes out wider than asked for
+has those columns shortened.
+
+Worth knowing:
+
+- a page holds a whole number of rows and a tuple is a whole number of alignment
+  boundaries wide, so **not every page count is reachable**. 20,000 rows fit in 409
+  pages or in 434, and in nothing between; the run says which one it landed on
+- a column sampled from a parent, or pinned by `--values-freq-map`, `--stat-file` or a
+  query literal, **holds what it was given** and is not used as filler
+- the filler is random rather than repeated, because postgres compresses a value before
+  deciding whether to store it out of line, and repeated padding compresses to nothing
+- past roughly 2000 bytes per row postgres pushes the widest column out of line into a
+  TOAST table and the heap stops growing. The run warns and names
+  `ALTER TABLE ... ALTER COLUMN ... SET STORAGE PLAIN`, which keeps it in the heap
+- a table with no free-text column has no room to grow into, and is warned about rather
+  than silently left as it was
+- the width model is postgres': fixed-width types count what their type takes, variable
+  ones count their length plus a header, and per-column alignment padding is not
+  modelled. On MySQL the filling still happens, the arithmetic is only approximate
+
 ## Checking a run against the target
 
 Loading the data is half of a reproduction; the other half is showing that what was
@@ -601,6 +658,7 @@ Without clear plan:
 - injected values are now escaped before reaching the INSERT, so a value holding a quote no longer breaks the statement
 - `--query-param-freq=0` no longer registers the query literals at a frequency of zero, it now leaves them out entirely
 - new `verify` subcommand, reading a filled database back and printing its row counts, page counts, selectivities, distinct counts and column statistics next to the reported figures they were meant to match
+- `run --target-bytes-per-row` and `run --target-relpages` aim a table at a row width or a page count, distributing the difference over the columns holding free text, so a load-measure-adjust cycle becomes one flag
 
 #### 0.2.3
 - NULL and/or fixed values can be injected at tunable rates

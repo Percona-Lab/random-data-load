@@ -56,11 +56,15 @@ func main() {
 		kong.ValueMapper(&cli.Run.ValuesFreqMap, &frequency.FrequencyIndexValuesParameter{}),
 		// every sampler's tuning takes a value per parent table as well as one
 		// for the whole run, so each needs its own reader
-		kong.ValueMapper(&cli.Run.CoinFlipPercent, &generate.RelationshipFloat{}),
-		kong.ValueMapper(&cli.Run.NormalStddev, &generate.RelationshipFloat{}),
-		kong.ValueMapper(&cli.Run.NormalMean, &generate.RelationshipFloat{}),
-		kong.ValueMapper(&cli.Run.ParetoS, &generate.RelationshipFloat{}),
-		kong.ValueMapper(&cli.Run.ParetoV, &generate.RelationshipFloat{}),
+		kong.ValueMapper(&cli.Run.CoinFlipPercent, &generate.PerTableFloat{}),
+		kong.ValueMapper(&cli.Run.NormalStddev, &generate.PerTableFloat{}),
+		kong.ValueMapper(&cli.Run.NormalMean, &generate.PerTableFloat{}),
+		kong.ValueMapper(&cli.Run.ParetoS, &generate.PerTableFloat{}),
+		kong.ValueMapper(&cli.Run.ParetoV, &generate.PerTableFloat{}),
+		// and so does a row width target, which describes the table being
+		// filled rather than a parent being sampled
+		kong.ValueMapper(&cli.Run.TargetBytesPerRow, &generate.PerTableFloat{}),
+		kong.ValueMapper(&cli.Run.TargetRelpages, &generate.PerTableFloat{}),
 		kong.Vars{
 			"version":        buildInfo,
 			"SequentialFlag": generate.SequentialFlag,

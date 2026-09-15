@@ -29,19 +29,20 @@ type Insert struct {
 	frequencies      frequency.ColumnFrequency
 	minGeneratedTime *time.Time
 	maxGeneratedTime *time.Time
+	widthTarget      *rowWidthTarget
 }
 
 type ForeignKeyLinks struct {
 	DefaultRelationship string            `name:"default-relationship" help:"Will define the default foreign-key relationship to apply. Possible values: ${BinomialFlag},${SequentialFlag}. The default relation can be overriden with other parameters --${BinomialFlag} or --${SequentialFlag}" enum:"${BinomialFlag},${SequentialFlag},${NormalFlag},${ParetoFlag}" default:"${BinomialFlag}"`
 	Binomial            map[string]string ` help:"Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). Format should be \"parent_table=child_table\" E.g: --${BinomialFlag}=\"customers=orders;orders=items\""`
 	Sequential          map[string]string `name:"sequential" help:"Defines a sequential foreign key links relationships, using SELECT ... LIMIT x OFFET y. Format should be \"parent_table=child_table\" E.g: --${SequentialFlag}=\"citizens=ssns\""`
-	CoinFlipPercent     RelationshipFloat `name:"coin-flip-percent" help:"When used with ${BinomialFlag}, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --${SequentialFlag}. Lower value (e.g 0.001) will also slow down the sampling speed. The right value depends on the parent being sampled, so it can be given per parent table: --coin-flip-percent=\"1;orders=3;products=5\"" default:"1"`
+	CoinFlipPercent     PerTableFloat     `name:"coin-flip-percent" help:"When used with ${BinomialFlag}, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --${SequentialFlag}. Lower value (e.g 0.001) will also slow down the sampling speed. The right value depends on the parent being sampled, so it can be given per parent table: --coin-flip-percent=\"1;orders=3;products=5\"" default:"1"`
 	Normal              map[string]string `help:"Defines a 1-N foreign key relationships using box-muller transformation to provide normal distribution. Slow method needing full table scans for each samples."`
-	NormalStddev        RelationshipFloat `help:"Standard deviation to the normal law. Will default to 1/10 of the row count of the parent table being sampled. Can be given per parent table: --normal-stddev=\"orders=5000;products=250\""`
-	NormalMean          RelationshipFloat `help:"Mean of the normal law. Will default to the middle of the parent table being sampled. Can be given per parent table: --normal-mean=\"orders=50000;products=1500\""`
+	NormalStddev        PerTableFloat     `help:"Standard deviation to the normal law. Will default to 1/10 of the row count of the parent table being sampled. Can be given per parent table: --normal-stddev=\"orders=5000;products=250\""`
+	NormalMean          PerTableFloat     `help:"Mean of the normal law. Will default to the middle of the parent table being sampled. Can be given per parent table: --normal-mean=\"orders=50000;products=1500\""`
 	Pareto              map[string]string `help:"Defines a 1-N foreign key relationships using zipf (pareto) distribution. Slow method needing full table scans for each samples"`
-	ParetoS             RelationshipFloat `help:"Zipf slope parameter. Must be above 1. Higher value will mean faster decay, so first rows will be hotter. Can be given per parent table: --pareto-s=\"1.1;orders=1.4\"" default:"1.1"`
-	ParetoV             RelationshipFloat `help:"Must be >=1. Directly map to V, https://pkg.go.dev/math/rand#Zipf. Can be given per parent table." default:"1.0"`
+	ParetoS             PerTableFloat     `help:"Zipf slope parameter. Must be above 1. Higher value will mean faster decay, so first rows will be hotter. Can be given per parent table: --pareto-s=\"1.1;orders=1.4\"" default:"1.1"`
+	ParetoV             PerTableFloat     `help:"Must be >=1. Directly map to V, https://pkg.go.dev/math/rand#Zipf. Can be given per parent table." default:"1.0"`
 }
 
 const (
@@ -107,6 +108,20 @@ func New(table *db.Table, fklinks ForeignKeyLinks, workersCount int, maxTextSize
 	return in
 }
 
+// SetTargetBytesPerRow aims the rows this table produces at a width.
+//
+// Row width decides how many rows fit in a page, page count decides scan
+// costs, and scan costs decide the plan, so it is usually the figure a
+// reproduction has to hit. The target is met by writing longer or shorter
+// values into the columns that hold free text; what each one has to hold is
+// worked out by a calibration pass before the run starts.
+func (in *Insert) SetTargetBytesPerRow(bytes int64) {
+	if bytes <= 0 {
+		return
+	}
+	in.widthTarget = &rowWidthTarget{bytesPerRow: bytes}
+}
+
 // SetWriter lets you specify a custom writer. The default is Stdout.
 func (in *Insert) SetWriter(w io.Writer) {
 	in.writer = w
@@ -123,6 +138,12 @@ func (in *Insert) DryRun(count, bulksize int64) error {
 }
 
 func (in *Insert) run(count int64, bulksize int64, dryRun bool) error {
+	// Before anything is written: a row width target has to know how wide a
+	// row comes out on its own before it can say what to add to it.
+	if err := in.calibrate(); err != nil {
+		return errors.Wrapf(err, "measuring the row width of %s.%s", in.table.Schema, in.table.Name)
+	}
+
 	// Example: want 11 rows with bulksize 4:
 	// count = int(11 / 4) = 2 -> 2 bulk inserts having 4 rows each = 8 rows
 	// We need to run this insert twice:
@@ -204,19 +225,54 @@ func (in *Insert) genQuery(count int64) (string, error) {
 		return "", nil
 	}
 
-	fieldsAsDefault := in.table.FieldsToInsertAsDefault()
-	fieldsToGen := in.table.FieldsToGenerate()
-	constraintsToSample := in.table.ConstraintsToSample()
-	fieldsToSample := constraintsToSample.Fields()
+	fields, values, err := in.buildValues(count)
+	if err != nil {
+		return "", err
+	}
+
 	var insertQuery strings.Builder
-	_, err := insertQuery.WriteString(fmt.Sprintf(db.InsertTemplate(), //nolint
+	_, err = insertQuery.WriteString(fmt.Sprintf(db.InsertTemplate(), //nolint
 		db.Escape(in.table.Schema),
 		db.Escape(in.table.Name),
-		db.EscapedNamesListFromFields(slices.Concat(fieldsAsDefault, fieldsToGen, fieldsToSample)),
+		db.EscapedNamesListFromFields(fields),
 	))
 	if err != nil {
 		log.Error().Err(err).Msg("failed to build string")
 	}
+
+	for row := range values {
+		if values[row] == nil {
+			continue
+		}
+		renderedRow, err := values[row].Render()
+		if err != nil {
+			return "", errors.Wrapf(err, "cannot write a row of %s.%s", in.table.Schema, in.table.Name)
+		}
+		insertQuery.WriteString(renderedRow)
+		if row != len(values)-1 {
+			insertQuery.WriteString(",")
+		}
+	}
+	return insertQuery.String(), nil
+}
+
+// buildValues fills count rows and hands back the columns they are for, in the
+// order the INSERT will list them.
+//
+// Split out of genQuery so that a row can be produced and looked at without
+// being written anywhere: measuring how wide a row comes out needs the values
+// themselves, generated and sampled exactly as a real bulk would be, and
+// nothing else about the statement.
+func (in *Insert) buildValues(count int64) ([]db.Field, []InsertValues, error) {
+	if count < 1 {
+		return nil, nil, nil
+	}
+
+	fieldsAsDefault := in.table.FieldsToInsertAsDefault()
+	fieldsToGen := in.table.FieldsToGenerate()
+	constraintsToSample := in.table.ConstraintsToSample()
+	fieldsToSample := constraintsToSample.Fields()
+	fields := slices.Concat(fieldsAsDefault, fieldsToGen, fieldsToSample)
 	log.Debug().Str("fieldsAsDefault", db.EscapedNamesListFromFields(fieldsAsDefault)).
 		Str("fieldsToGen", db.EscapedNamesListFromFields(fieldsToGen)).
 		Str("fieldsToSample", db.EscapedNamesListFromFields(fieldsToSample)).
@@ -278,22 +334,9 @@ func (in *Insert) genQuery(count int64) (string, error) {
 
 	wg.Wait()
 	if sampleErr != nil {
-		return "", errors.Wrapf(sampleErr, "cannot sample the foreign keys of %s.%s", in.table.Schema, in.table.Name)
+		return nil, nil, errors.Wrapf(sampleErr, "cannot sample the foreign keys of %s.%s", in.table.Schema, in.table.Name)
 	}
-	for row := range values {
-		if values[row] == nil {
-			continue
-		}
-		renderedRow, err := values[row].Render()
-		if err != nil {
-			return "", errors.Wrapf(err, "cannot write a row of %s.%s", in.table.Schema, in.table.Name)
-		}
-		insertQuery.WriteString(renderedRow)
-		if row != len(values)-1 {
-			insertQuery.WriteString(",")
-		}
-	}
-	return insertQuery.String(), nil
+	return fields, values, nil
 }
 
 func (in *Insert) insert(count int64, dryRun bool) (int64, error) {
@@ -356,6 +399,10 @@ func (in *Insert) generateFieldsRow(fields []db.Field, insertValues []Getter) {
 			maxSize := in.maxTextSize
 			if maxSize > field.CharacterMaximumLength.Int64 {
 				maxSize = field.CharacterMaximumLength.Int64
+			}
+			if length, filled := in.widthTarget.lengthFor(field.ColumnName); filled {
+				gw.Assign(NewFilledString(field.ColumnName, length, maxSize))
+				break
 			}
 			gw.Assign(NewRandomString(field.ColumnName, maxSize))
 		case "year":

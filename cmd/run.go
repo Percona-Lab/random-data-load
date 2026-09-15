@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"regexp"
 	"slices"
@@ -35,14 +36,17 @@ type RunCmd struct {
 	Query            string           `help:"Providing a query will enable to automatically discover the schema, insert recursively into tables, enforce implicit joins."`
 
 	generate.ForeignKeyLinks
-	AddForeignKeys  query.VirtualJoins                      `name:"add-fk" help:"Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk=\"parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]\". Example: --add-fk=\"customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id\""`
-	NoFKGuess       bool                                    `name:"no-fk-guess" help:"Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-fk." `
-	NoSkipFields    bool                                    `name:"no-skip-fields" help:"Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found."`
-	NullFreq        float64                                 `name:"null-freq" help:"Define how frequent nullable fields should be NULL by default." default:"0.1"`
-	NullFreqMap     frequency.FrequencyNullParameter        `name:"null-freq-map" help:"Define how frequent nullable fields should be NULL for a given column, as a fraction between 0 and 1 like --null-freq. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=0.73;t1.c2=0.04\" to set 73% or 4% of NULL for respective columns" default:""`
-	ValuesFreqMap   frequency.FrequencyIndexValuesParameter `name:"values-freq-map" help:"Inject arbitrary values at fixed frequencies. The format is \"--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99\" so that val1 will be on 75% of rows and val2 on 23% for column c1" default:""` // TODO we're not checking if the total freq is above 1
-	QueryParamsFreq float64                                 `name:"query-param-freq" help:"Frequency at which to insert arbitrary values guessed from the query parameters. = and IN operators are handled. Can be disabled when set to 0.0." default:"0.1"`
-	StatFile        string                                  `name:"stat-file" help:"Scan a column statistics export and reuse its null_frac, most_common_vals and most_common_freqs as --null-freq-map and --values-freq-map. Use the \"export-stat\" subcommand to get the command producing that file." type:"path"`
+	AddForeignKeys    query.VirtualJoins                      `name:"add-fk" help:"Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk=\"parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]\". Example: --add-fk=\"customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id\""`
+	NoFKGuess         bool                                    `name:"no-fk-guess" help:"Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-fk." `
+	NoSkipFields      bool                                    `name:"no-skip-fields" help:"Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found."`
+	NullFreq          float64                                 `name:"null-freq" help:"Define how frequent nullable fields should be NULL by default." default:"0.1"`
+	NullFreqMap       frequency.FrequencyNullParameter        `name:"null-freq-map" help:"Define how frequent nullable fields should be NULL for a given column, as a fraction between 0 and 1 like --null-freq. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=0.73;t1.c2=0.04\" to set 73% or 4% of NULL for respective columns" default:""`
+	ValuesFreqMap     frequency.FrequencyIndexValuesParameter `name:"values-freq-map" help:"Inject arbitrary values at fixed frequencies. The format is \"--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99\" so that val1 will be on 75% of rows and val2 on 23% for column c1" default:""` // TODO we're not checking if the total freq is above 1
+	QueryParamsFreq   float64                                 `name:"query-param-freq" help:"Frequency at which to insert arbitrary values guessed from the query parameters. = and IN operators are handled. Can be disabled when set to 0.0." default:"0.1"`
+	TargetBytesPerRow generate.PerTableFloat                  `name:"target-bytes-per-row" help:"Aim the rows of a table at an average width, in bytes, by writing longer or shorter values into its free-text columns. It is the figure a plan's \"width=\" is built from, and the one that decides how many rows fit in a page. Can be given per table: --target-bytes-per-row=\"97;order_items=24\"" default:""`
+	TargetRelpages    generate.PerTableFloat                  `name:"target-relpages" help:"Aim a table at a page count instead, which --rows and postgres' page layout turn into a row width. Page count is what a sequential scan's cost is built from, so it is usually the figure a reproduction has to hit. Can be given per table: --target-relpages=\"orders=12345\". Postgres only. " default:""`
+
+	StatFile string `name:"stat-file" help:"Scan a column statistics export and reuse its null_frac, most_common_vals and most_common_freqs as --null-freq-map and --values-freq-map. Use the \"export-stat\" subcommand to get the command producing that file." type:"path"`
 }
 
 // Run starts inserting data.
@@ -80,6 +84,10 @@ func (cmd *RunCmd) Run() error {
 				return errors.Errorf("--pareto-v needs to be >=1, got %g", v)
 			}
 		}
+	}
+
+	if err := cmd.checkWidthTargets(); err != nil {
+		return err
 	}
 
 	tablesNames := map[string]struct{}{}
@@ -205,6 +213,61 @@ func (cmd *RunCmd) Run() error {
 	return err
 }
 
+// checkWidthTargets refuses a row width target that cannot mean anything,
+// before a single row is written.
+func (cmd *RunCmd) checkWidthTargets() error {
+	if len(cmd.TargetRelpages) > 0 && cmd.DB.Engine != "pg" {
+		return errors.New("--target-relpages is postgres geometry: a page holds its header, a line pointer per row and a tuple header per row, and what is left is the room the columns have. InnoDB organises a table by its primary key and reports a size it sampled rather than counted, so the same arithmetic would not mean anything. Use --target-bytes-per-row")
+	}
+
+	for table := range cmd.TargetRelpages {
+		if _, both := cmd.TargetBytesPerRow[table]; !both {
+			continue
+		}
+		named := "every table"
+		if table != "" {
+			named = table
+		}
+		return errors.Errorf("--target-bytes-per-row and --target-relpages both given for %s, and they are two ways of asking for the same thing. Keep one", named)
+	}
+	return nil
+}
+
+// rowWidthTarget is the width this table's rows are aimed at, in bytes.
+//
+// --target-relpages is the figure a plan actually turns on, and it is the same
+// target seen from the other side: the row count this run was given says how
+// many rows have to fit in those pages, and postgres' page layout says how
+// wide a row that makes.
+func (cmd *RunCmd) rowWidthTarget(table *db.Table, rows int64) int64 {
+	if cmd.TargetBytesPerRow.IsSetFor(table.Name) {
+		return int64(math.Round(cmd.TargetBytesPerRow.For(table.Name)))
+	}
+	if !cmd.TargetRelpages.IsSetFor(table.Name) {
+		return 0
+	}
+
+	pages := int64(math.Round(cmd.TargetRelpages.For(table.Name)))
+	bytes, reached := generate.BytesPerRowForPages(rows, pages)
+	if bytes <= 0 {
+		log.Warn().Str("table", table.Name).Int64("pages", pages).Int64("rows", rows).
+			Msgf("%d rows cannot be spread over %d pages of %s. Leaving its width alone", rows, pages, table.Name)
+		return 0
+	}
+
+	// A page holds a whole number of rows, so not every page count can be
+	// asked for. Saying which one this width actually reaches is the
+	// difference between a target that was met and one that looks like it was.
+	if reached != pages {
+		log.Warn().Str("table", table.Name).Int64("askedPages", pages).Int64("reachedPages", reached).Int64("bytesPerRow", bytes).
+			Msgf("%s cannot be spread over exactly %d pages: a page holds a whole number of rows, and the nearest reachable count for %d rows is %d, at %d bytes per row", table.Name, pages, rows, reached, bytes)
+		return bytes
+	}
+	log.Info().Str("table", table.Name).Int64("pages", pages).Int64("rows", rows).Int64("bytesPerRow", bytes).
+		Msgf("aiming %s at %d pages: %d rows over %d pages is %d bytes per row", table.Name, pages, rows, pages, bytes)
+	return bytes
+}
+
 func tableNames(tables []*db.Table) []string {
 	names := make([]string, 0, len(tables))
 	for _, table := range tables {
@@ -285,6 +348,7 @@ func (cmd *RunCmd) run(table *db.Table) error {
 	rows := valueForTable(cmd.Rows, cmd.RowsPerTable, table.Name)
 	colNullFreqs := frequency.SharedTableFrequency[table.Name]
 	ins := generate.New(table, cmd.ForeignKeyLinks, cmd.WorkersCount, cmd.MaxTextSize, cmd.UUIDVersion, colNullFreqs, &cmd.MinGeneratedTime, &cmd.MaxGeneratedTime)
+	ins.SetTargetBytesPerRow(cmd.rowWidthTarget(table, rows))
 
 	if !cmd.Quiet && !cmd.DryRun {
 		go startProgressBar(table.Name, rows, ins.NotifyChan)

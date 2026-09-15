@@ -674,6 +674,37 @@ func TestRun(t *testing.T) {
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 
+		// Row width decides how many rows fit in a page, page count decides
+		// scan costs, and scan costs decide the plan, so a reproduction
+		// usually has to hit a width. pg_column_size of a whole row is the
+		// column data plus the 24-byte tuple header, so a run aimed at 180
+		// bytes has to come back at 204.
+		// The two flags are the same target seen from either end, so asking
+		// for both is a contradiction rather than a refinement.
+		{
+			name:      "target_width",
+			engines:   []string{"pg"},
+			cmds:      [][]string{[]string{"--rows=20000", "--table=t1", "--null-freq=0", "--target-relpages=400", "--target-bytes-per-row=180"}},
+			expectErr: "they are two ways of asking for the same thing",
+		},
+		{
+			name:       "target_width",
+			checkQuery: "select (count(*) = 20000) and (avg(pg_column_size(t1.*)) between 200 and 208) from t1;",
+			engines:    []string{"pg"},
+			cmds:       [][]string{[]string{"--rows=20000", "--table=t1", "--null-freq=0", "--target-bytes-per-row=180"}},
+		},
+
+		// The same target written as the page count it exists to reach. 20,000
+		// rows cannot be spread over exactly 400 pages -- a page holds a whole
+		// number of rows -- so the run lands on the nearest reachable count,
+		// 409, at 136 bytes per row.
+		{
+			name:       "target_width",
+			checkQuery: "select (count(*) = 20000) and (avg(pg_column_size(t1.*)) between 156 and 164) from t1;",
+			engines:    []string{"pg"},
+			cmds:       [][]string{[]string{"--rows=20000", "--table=t1", "--null-freq=0", "--target-relpages=400"}},
+		},
+
 		// verify reads the generated tables back and holds them against what
 		// the run was given. The statistics export is the sharpest input it
 		// takes: every null fraction and every common value's frequency in it

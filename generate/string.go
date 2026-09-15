@@ -1,6 +1,7 @@
 package generate
 
 import (
+	"math/rand"
 	"regexp"
 	"strings"
 
@@ -127,4 +128,49 @@ func truncateRunes(s string, max int64) string {
 		count++
 	}
 	return s
+}
+
+// fillerAlphabet is what a value is padded with. Letters and digits only: the
+// padding lands in a text column of a real schema, it goes through an INSERT
+// as a literal, and it should not be the reason a run fails.
+const fillerAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+// NewFilledString returns a value of the column's usual shape, written out to
+// a given length.
+//
+// Row width decides how many rows fit in a page, so hitting a page count means
+// hitting a row width, and the only columns whose width this tool can choose
+// are the ones holding free text. The value still starts as whatever the
+// column's name suggests -- an email column still holds an email -- and is
+// then padded so that the column takes the room it was asked to take.
+//
+// The padding is random rather than repeated, because postgres compresses a
+// varlena before deciding whether to push it out of line, and a column padded
+// with one repeated character compresses to nothing and takes no room at all.
+//
+// maxLength is the column's own limit, in characters. A target that does not
+// fit in the column is cut down to what does: the calibration pass has already
+// warned about the width it could not reach, and writing a value the column
+// refuses would fail the whole bulk.
+func NewFilledString(name string, length, maxLength int64) *RandomString {
+	if maxLength > 0 && length > maxLength {
+		length = maxLength
+	}
+	if length < 0 {
+		length = 0
+	}
+
+	value := NewRandomString(name, length).value
+
+	// The base value is counted in bytes, the column's limit in characters, so
+	// both are watched: a name holding an accent is two bytes and one
+	// character, and padding to the byte target would overrun a char(n).
+	characters := int64(len([]rune(value)))
+	var b strings.Builder
+	b.WriteString(value)
+	for int64(b.Len()) < length && (maxLength <= 0 || characters < maxLength) {
+		b.WriteByte(fillerAlphabet[rand.Intn(len(fillerAlphabet))])
+		characters++
+	}
+	return &RandomString{truncateRunes(b.String(), maxLength)}
 }
