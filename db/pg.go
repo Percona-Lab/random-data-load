@@ -14,7 +14,9 @@ var postgresTypeMapping = map[string]string{
 	"numeric":                     "decimal",
 	"double precision":            "double",
 	"character varying":           "varchar",
+	"character":                   "char",
 	"time with time zone":         "time",
+	"time without time zone":      "time",
 	"timestamp with time zone":    "timestamp",
 	"timestamp without time zone": "timestamp",
 }

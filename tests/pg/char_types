@@ -1,0 +1,5 @@
+CREATE TABLE t1(
+	c1 char(2) NOT NULL,
+	c2 char(8),
+	c3 time without time zone NOT NULL
+);
