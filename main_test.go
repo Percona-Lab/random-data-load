@@ -674,6 +674,21 @@ func TestRun(t *testing.T) {
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 
+		// The query filters on status='cancelled', so --query-param-freq
+		// registers it at its default of 0.1 so that the query returns rows.
+		// The export measured it at 0.0398. The measurement has to win: at 10%
+		// this is a sequential scan where the reported side had a bitmap scan.
+		{
+			name: "query_param_stat_file",
+			checkQuery: `select (count(*) = 50000)
+				and (sum(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) between 1700 and 2300)
+				and (sum(CASE WHEN status = 'shipped' THEN 1 ELSE 0 END) between 30000 and 32000)
+				from t1;`,
+			inputQuery: "select id, status from t1 where status = 'cancelled'",
+			engines:    []string{"pg"},
+			cmds:       [][]string{[]string{"--rows=50000", "--table=t1", "--null-freq=0", "--stat-file=tests/pg/query_param_stat_file.json"}},
+		},
+
 		// tests/pg/fk_skew.json is what a dump holds for a foreign key column:
 		// most_common_vals full of the source database's own parent ids, which
 		// mean nothing here, and most_common_freqs saying how skewed the join

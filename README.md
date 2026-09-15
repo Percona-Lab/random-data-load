@@ -426,8 +426,17 @@ A few things worth knowing:
   contributes on its own, so the result lands on what was measured rather than above it.
   Only single-column keys: the common values of one column of a composite key say how
   often that column repeats, not how often the pair does
-- `--null-freq-map`, `--values-freq-map` and the literals taken from `--query` win.
-  A value they already give a frequency to keeps it, and is not counted twice
+- `--null-freq-map` and `--values-freq-map` win: a value given a frequency **by name**
+  is a decision, and the export does not overrule it
+- a literal taken from `--query` does **not** win. `--query-param-freq` registers it at
+  a default of 0.1 so the query returns rows at all, which is a guess at a number nobody
+  measured; when the export measured that same value, the measurement replaces the guess
+  and the run says so. `status='cancelled'` at 10% instead of 3.98% is a sequential scan
+  where the reported side had a bitmap scan
+- a query literal the export does not list among the column's most common values is
+  warned about: it is rarer than the rarest one listed, so 0.1 is far too large for it
+  and nothing here can say by how much
+- a value is never counted twice, whichever of them it came from
 - a column postgres recorded no NULL for gets none, rather than falling back to
   `--null-freq`
 - `null_frac` is scaled up before use. A row is drawn as NULL first and then
@@ -695,6 +704,7 @@ Without clear plan:
 - a unique key whose columns come from several foreign keys is filled from all of them at once, walking the combinations their parents can make, instead of each key walking its own parent and the pair repeating as soon as the shortest walk came round; asking for more rows than those parents can make combinations is refused up front
 - a run whose tables point foreign keys at tables it does not fill is refused before anything is written, in one message naming the whole closure, instead of failing part way through with some tables already loaded; `--fill-fk-parents` adds those tables to the run instead
 - `--stat-file` no longer tries to insert the source database's parent ids into a foreign key column, which pointed it at rows that do not exist; the key's measured skew is reproduced instead, by sampling that share of the child's rows from one parent row each
+- a frequency measured by `--stat-file` now wins over the one `--query-param-freq` guesses for the same value, instead of the guess silently standing; a value pinned by name with `--values-freq-map` still wins over both, and a query literal the export does not list at all is warned about
 
 #### 0.2.3
 - NULL and/or fixed values can be injected at tunable rates

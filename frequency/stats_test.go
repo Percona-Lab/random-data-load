@@ -124,11 +124,21 @@ func TestMergeStats(t *testing.T) {
 			wantNull: 0.3,
 		},
 		{
-			name:      "a value already carrying a frequency is not given a second one",
-			existing:  ColumnFrequency{"c1": {IndexValues: []string{"a"}, IndexFrequencies: []float64{0.8}}},
+			// asked for by name: a decision, and not one the dump overrules
+			name:      "a value given a frequency on the command line keeps it, and is not listed twice",
+			existing:  ColumnFrequency{"c1": {IndexValues: []string{"a"}, IndexFrequencies: []float64{0.8}, indexDeliberate: []bool{true}}},
 			stats:     []ColumnStats{{Tablename: "t1", Attname: "c1", MostCommonVals: []string{"a", "b"}, MostCommonFreqs: []float64{0.5, 0.2}}},
 			wantVals:  []string{"a", "b"},
 			wantFreqs: []float64{0.8, 0.2},
+		},
+		{
+			// taken from a --query at --query-param-freq: a guess at a number
+			// nobody measured, and the dump measured it
+			name:      "a value guessed from the query takes the frequency the dump measured",
+			existing:  ColumnFrequency{"c1": {IndexValues: []string{"a"}, IndexFrequencies: []float64{0.1}, indexDeliberate: []bool{false}}},
+			stats:     []ColumnStats{{Tablename: "t1", Attname: "c1", MostCommonVals: []string{"a", "b"}, MostCommonFreqs: []float64{0.5, 0.2}}},
+			wantVals:  []string{"a", "b"},
+			wantFreqs: []float64{0.5, 0.2},
 		},
 		{
 			name:      "a value left at a frequency of zero claims nothing",
@@ -254,5 +264,73 @@ func TestMergeStatsReproducesTheDump(t *testing.T) {
 		if math.Abs(got-want) > 0.005 {
 			t.Errorf("%q ended up on %.4f of the rows, want %.4f", value, got, want)
 		}
+	}
+}
+
+// The bug this replaced: --query-param-freq registers every literal a query
+// compares a column to, at a default of 0.1, and that guess used to outrank the
+// frequency the export measured. status='cancelled' at 10% instead of 3.98% is
+// a sequential scan where the reported side had a bitmap scan.
+func TestMeasuredFrequencyOutranksTheQueryGuess(t *testing.T) {
+	SharedTableFrequency = map[string]ColumnFrequency{}
+	MergeQueryParameters(map[string][]string{"orders.status": {"cancelled"}}, 0.1)
+
+	if got := SharedTableFrequency["orders"]["status"].IndexFrequencies; !reflect.DeepEqual(got, []float64{0.1}) {
+		t.Fatalf("the query literal was registered at %v, want [0.1]", got)
+	}
+
+	MergeStats([]ColumnStats{{
+		Tablename: "orders", Attname: "status",
+		MostCommonVals: []string{"shipped", "cancelled"}, MostCommonFreqs: []float64{0.62, 0.0398},
+	}}, sameTable)
+
+	freq := SharedTableFrequency["orders"]["status"]
+	at := freq.entryFor("cancelled")
+	if at < 0 {
+		t.Fatalf("cancelled is no longer being inserted at all: %v %v", freq.IndexValues, freq.IndexFrequencies)
+	}
+	if freq.IndexFrequencies[at] != 0.0398 {
+		t.Errorf("cancelled is inserted at %g, the export measured 0.0398", freq.IndexFrequencies[at])
+	}
+	// and it is still only listed once
+	if len(freq.IndexValues) != 2 {
+		t.Errorf("values = %q, want shipped and cancelled once each", freq.IndexValues)
+	}
+}
+
+// A value pinned by name is a decision rather than a guess, so the export does
+// not overrule it even though it measured something else.
+func TestNamedFrequencyOutranksTheExport(t *testing.T) {
+	SharedTableFrequency = map[string]ColumnFrequency{}
+	SharedTableFrequency["orders"] = ColumnFrequency{"status": {}}
+	freq := SharedTableFrequency["orders"]["status"]
+	freq.add("cancelled", 0.28, true)
+	SharedTableFrequency["orders"]["status"] = freq
+
+	MergeStats([]ColumnStats{{
+		Tablename: "orders", Attname: "status",
+		MostCommonVals: []string{"cancelled"}, MostCommonFreqs: []float64{0.0398},
+	}}, sameTable)
+
+	got := SharedTableFrequency["orders"]["status"]
+	if got.IndexFrequencies[0] != 0.28 {
+		t.Errorf("cancelled is inserted at %g, --values-freq-map asked for 0.28", got.IndexFrequencies[0])
+	}
+}
+
+// A foreign key column's values cannot be inserted, only its skew kept.
+func TestForeignKeyColumnKeepsOnlyItsSkew(t *testing.T) {
+	SharedTableFrequency = map[string]ColumnFrequency{}
+	MergeStats([]ColumnStats{{
+		Tablename: "orders", Attname: "customer_id",
+		MostCommonVals: []string{"881271", "44052"}, MostCommonFreqs: []float64{0.31, 0.12},
+	}}, foreignKey)
+
+	got := SharedTableFrequency["orders"]["customer_id"]
+	if len(got.IndexValues) != 0 {
+		t.Errorf("the source database's parent ids are being inserted: %q", got.IndexValues)
+	}
+	if !reflect.DeepEqual(got.KeyFrequencies, []float64{0.31, 0.12}) {
+		t.Errorf("key frequencies = %v, want [0.31 0.12]", got.KeyFrequencies)
 	}
 }

@@ -34,6 +34,12 @@ type Frequency struct {
 	// scanned pg_stats dump, so that an explicit flag is never overwritten by
 	// what the dump happens to say.
 	nullFromFlag bool
+
+	// indexDeliberate runs alongside IndexValues: true for a value someone
+	// asked for by name on the command line, false for one taken from a
+	// --query, which is a guess at a frequency rather than a statement of one.
+	// A measured frequency outranks the guess and not the instruction.
+	indexDeliberate []bool
 }
 
 type FrequencyNullParameter TableFrequency
@@ -218,11 +224,44 @@ func MergeQueryParameters(params map[string][]string, defaultFrequency float64) 
 					Msg("value already given a frequency on the command line, keeping that one instead of adding the query's")
 				continue
 			}
-			freq.IndexValues = append(freq.IndexValues, value)
-			freq.IndexFrequencies = append(freq.IndexFrequencies, defaultFrequency)
+			// a guess: --query-param-freq is a number nobody measured, and a
+			// dump that did measure this value replaces it later
+			freq.add(value, defaultFrequency, false)
 		}
 		colFreqMap[parts[1]] = freq
 		SharedTableFrequency[parts[0]] = colFreqMap
 	}
 
+}
+
+// add records a value to inject, saying whether it was asked for by name or
+// guessed from a query.
+func (freq *Frequency) add(value string, share float64, deliberate bool) {
+	freq.IndexValues = append(freq.IndexValues, value)
+	freq.IndexFrequencies = append(freq.IndexFrequencies, share)
+
+	// The flag is only written once there is something to say, so an entry
+	// added before this existed reads as a guess, which is the safe way round.
+	for len(freq.indexDeliberate) < len(freq.IndexValues)-1 {
+		freq.indexDeliberate = append(freq.indexDeliberate, false)
+	}
+	freq.indexDeliberate = append(freq.indexDeliberate, deliberate)
+}
+
+// entryFor returns where this value already sits, or -1. An entry left at a
+// frequency of zero claims nothing: it would never be inserted, so treating it
+// as a decision would only silence whatever comes next.
+func (freq *Frequency) entryFor(value string) int {
+	for i, existing := range freq.IndexValues {
+		if existing == value && i < len(freq.IndexFrequencies) && freq.IndexFrequencies[i] > 0 {
+			return i
+		}
+	}
+	return -1
+}
+
+// deliberate reports whether this entry was asked for by name rather than
+// guessed from a query.
+func (freq *Frequency) deliberate(i int) bool {
+	return i >= 0 && i < len(freq.indexDeliberate) && freq.indexDeliberate[i]
 }
