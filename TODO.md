@@ -7,8 +7,11 @@ same 10-table schema behind a CTE and a derived-table join. Sixteen runs, all
 of which did reproduce their target plan node for node.
 
 Everything below was observed in those runs and re-confirmed by hand against
-the binary at 48d2078. The entries marked **Done** have since been fixed on
-this branch; the rest are still open.
+the binary at 48d2078. What has since been fixed has been taken out; what is
+left is still open.
+
+E now has a plan of its own in PLAN-E-physical-correlation.md, written to be
+reviewed before any of it is built.
 
 ## Bugs
 
@@ -57,59 +60,6 @@ While there: the whitelist collects raw identifiers, so it also contains table
 names (`'orders'`) and function names (`'count'`). Harmless as a filter, but it
 means the list is not really a column list.
 
-### 6. Composite primary keys collide when the sequential walk wraps
-
-Filling `inventory(warehouse_id, product_id)` — a two-column PK sampled from
-two parents — fails with `duplicate key value` once the sequential parent walk
-wraps around. One run got 300k of the 400k rows it asked for and finished the
-remainder with hand-written SQL. Uniqueness has to hold across the whole key,
-not per column.
-
-### 7. A query's own table set is never sufficient
-
-`--query` fills the tables the query names, but those tables have `NOT NULL`
-foreign keys to tables it does not name, and the run dies partway through:
-
-```
-failed to insert on public.products: cannot sample the foreign keys of public.products:
-table public.categories is empty, so there is nothing to point a foreign key at.
-```
-
-The message is good, and the behaviour is correct rather than broken — but the
-tool already knows the full FK closure at that point, so it could either pull
-those parents in automatically or refuse up front with the list of tables that
-must be filled first, instead of failing after some tables are already loaded.
-
-### 8. Foreign-key column statistics cannot be imported
-
-`--stat-file` matches by table and column name, so it happily accepts the
-`most_common_vals` of a foreign key column — but those are literal parent ids
-from the customer's database, and this tool assigns random values to `serial`
-and `bigserial` keys, so the ids do not exist locally. Every run had to strip
-those entries from the dump by hand before importing, or watch the FK sampling
-fail.
-
-This is not cosmetic. Postgres reads `most_common_freqs[1]` of the inner join
-column to size hash buckets, so join-key skew is what decides which side of a
-hash join is the build side. In the 10-table case that was the single hardest
-thing to reproduce: one run patched it with SQL after loading, one manufactured
-it by abusing `--coin-flip-percent=100 --bulk-size=100`, and one could not flip
-it at all.
-
-Worth considering: honour a parent's imported key frequencies by *sampling the
-parent rows in that proportion*, which is expressible without inventing ids.
-
-### 9. `--query-param-freq` silently overrides `--stat-file`
-
-Query literals outrank the stat file, so with the default `0.1` a predicate
-that appears both in the query and in the dump lands at 10% instead of its real
-frequency — `status='cancelled'` at 10% rather than 3.98% is a sequential scan
-where the customer had a bitmap scan. Every run that used `--stat-file` had to
-discover `--query-param-freq=0` for itself, some after a full reload.
-
-When a column's frequency comes from an imported dump, the measured value
-should win over a literal guessed from the query, or at least warn loudly.
-
 ### 10. `--version` prints nothing outside a release build
 
 `main.go:31` builds the version string from ldflags-only variables, so a
@@ -125,29 +75,6 @@ tool arm cost 1.34x and 1.54x the hand-written arm on the first two cases and
 would actually close, judged by what the sixteen runs demonstrably spent their
 turns on.
 
-### B. Target a row width or a page count directly
-
-Row width decides `relpages`, `relpages` decides scan costs, and scan costs
-decide the plan — including whether postgres parallelises at all. Every run in
-both arms solved for a target tuple width and then iterated: load, measure
-`relpages`, adjust text lengths, reload. Several built a small-scale calibration
-schema first purely to shorten that loop.
-
-A `--target-bytes-per-row` or `--target-relpages` per table, with the filler
-distributed across the free-text columns, would replace an entire
-load-measure-adjust cycle with one flag.
-
-### D. Verify a load against the target
-
-Every run ended by hand-writing the same verification SQL: count rows per
-table, compute the predicate selectivities, count distinct values, read back
-`relpages` and `reltuples`, then compare each against the reported figures.
-That is another identical, mechanical step repeated sixteen times.
-
-A `verify` subcommand taking the same `--stat-file` and target EXPLAIN and
-printing a reported-versus-generated table would end every run in one call —
-and it is exactly the comparison that belongs in a support ticket anyway.
-
 ### E. Control physical correlation
 
 Nothing exposes whether a foreign key column is correlated with insert order,
@@ -161,15 +88,6 @@ heavily here too, one of them resorting to gaussian displacement and patching
 
 A per-relationship `--correlated` / `--scattered` choice would make this
 reachable instead of accidental.
-
-### G. Fix the bugs above, which cost a diagnose-and-retry cycle each
-
-Items 3 through 7 each cost a failed run, a diagnosis and a workaround in the
-runs that hit them: the `char(n)` refusal, the UTF-8 truncation crash, the
-numeric scale overflow, the composite-key collision and the empty-parent abort.
-None of them is conceptually hard, and each one currently converts into several
-turns of an agent's time and a paragraph of explanation in whatever script it
-writes.
 
 ## What already works and should not regress
 
