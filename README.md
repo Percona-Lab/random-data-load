@@ -270,7 +270,15 @@ A parent key is read whatever its type, including the types no value can be gene
 
 Every distribution is measured against the parent table it samples, not against --rows: --coin-flip-percent is raised when the parent is too small for it (a 1% coin flip over a 500-row dimension table is expected to return 5 rows, and returns none often enough for it to be the normal outcome), --normal-mean and --normal-stddev default to the middle and a tenth of the parent, and --sequential wraps back to the parent's first row once it has handed out all of them.
 
-An empty parent table is refused, naming it: there is nothing for a foreign key to point at, and the child rows it cannot fill are not silently left out.
+An empty parent table is refused, naming it: there is nothing for a foreign key to point
+at, and the child rows it cannot fill are not silently left out. That check now happens
+before anything is written rather than when the first sample is taken. A `--query` names
+the tables it reads, and those tables have NOT NULL foreign keys to tables it does not
+name; the run used to discover that part way through, with the tables ahead of it in the
+insert order already loaded. The whole closure is walked up front and refused in one
+message naming every table that has to be filled first, or, with `--fill-fk-parents`,
+those tables are added to the run and filled with `--rows`/`--rows-per-table`. A parent
+that already holds rows is left alone either way.
 
 A unique key whose columns come from **several** foreign keys is filled from all of them
 at once. Filled one key at a time, each sampler walks its own parent and behaves
@@ -675,6 +683,7 @@ Without clear plan:
 - new `verify` subcommand, reading a filled database back and printing its row counts, page counts, selectivities, distinct counts and column statistics next to the reported figures they were meant to match
 - `run --target-bytes-per-row` and `run --target-relpages` aim a table at a row width or a page count, distributing the difference over the columns holding free text, so a load-measure-adjust cycle becomes one flag
 - a unique key whose columns come from several foreign keys is filled from all of them at once, walking the combinations their parents can make, instead of each key walking its own parent and the pair repeating as soon as the shortest walk came round; asking for more rows than those parents can make combinations is refused up front
+- a run whose tables point foreign keys at tables it does not fill is refused before anything is written, in one message naming the whole closure, instead of failing part way through with some tables already loaded; `--fill-fk-parents` adds those tables to the run instead
 
 #### 0.2.3
 - NULL and/or fixed values can be injected at tunable rates

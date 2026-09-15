@@ -674,6 +674,39 @@ func TestRun(t *testing.T) {
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 
+		// Filling t3 alone needs t2, and filling t2 needs t1. Neither holds a
+		// row, so the run cannot be done as asked and is refused before
+		// anything is written. The whole closure has to be named in that one
+		// message -- naming t2 alone would only send the caller round the same
+		// loop again for t1 -- which is what checking for the deeper table
+		// here is for.
+		{
+			name:      "fk_missing_parent",
+			engines:   []string{"pg", "mysql"},
+			cmds:      [][]string{[]string{"--rows=50", "--table=t3"}},
+			expectErr: "t1 (pointed at by",
+		},
+		{
+			name:       "fk_missing_parent",
+			checkQuery: "select (select count(*) from t1) = 50 and (select count(*) from t2) = 50 and (select count(*) from t3) = 50;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=50", "--table=t3", "--fill-fk-parents", "--default-relationship=sequential"}},
+		},
+
+		// A parent outside the run that already holds rows needs nothing:
+		// filling a child against a dimension table an earlier run left behind
+		// is ordinary, and reloading it would be the surprise.
+		{
+			name:       "fk_missing_parent",
+			checkQuery: "select (select count(*) from t2) = 50 and (select count(*) from t3) = 50;",
+			engines:    []string{"pg", "mysql"},
+			cmds: [][]string{
+				[]string{"--rows=50", "--table=t1"},
+				[]string{"--rows=50", "--table=t2", "--default-relationship=sequential"},
+				[]string{"--rows=50", "--table=t3", "--default-relationship=sequential"},
+			},
+		},
+
 		// A two-column primary key whose columns come from two different
 		// parents. Filled one key at a time, the pair repeats as soon as the
 		// shorter walk comes round again -- over 50 and 100 parent rows, every

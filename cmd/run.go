@@ -37,6 +37,7 @@ type RunCmd struct {
 
 	generate.ForeignKeyLinks
 	AddForeignKeys    query.VirtualJoins                      `name:"add-fk" help:"Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk=\"parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]\". Example: --add-fk=\"customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id\""`
+	FillFKParents     bool                                    `name:"fill-fk-parents" help:"Add the tables a foreign key points at to this run when they hold no row, filling them with --rows or --rows-per-table. Without it, such a run is refused up front naming them, rather than failing part way through with some tables already loaded."`
 	NoFKGuess         bool                                    `name:"no-fk-guess" help:"Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-fk." `
 	NoSkipFields      bool                                    `name:"no-skip-fields" help:"Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found."`
 	NullFreq          float64                                 `name:"null-freq" help:"Define how frequent nullable fields should be NULL by default." default:"0.1"`
@@ -146,6 +147,14 @@ func (cmd *RunCmd) Run() error {
 	joins = append(joins, cmd.AddForeignKeys...)
 	if len(joins) > 0 {
 		db.AddVirtualFKs(tables, joins)
+	}
+
+	// Every key of every table in the run has to have something to point at
+	// before anything is written, or the run dies part way through with some
+	// tables already loaded.
+	tables, err = cmd.resolveForeignKeyParents(tables)
+	if err != nil {
+		return err
 	}
 
 	// now we have the full table list and every key it will have to satisfy,
@@ -274,6 +283,90 @@ func tableNames(tables []*db.Table) []string {
 		names = append(names, table.FullName())
 	}
 	return names
+}
+
+// resolveForeignKeyParents makes sure every table this run points a foreign
+// key at holds something to point at.
+//
+// A --query names the tables it reads, and those tables have NOT NULL foreign
+// keys to tables it does not name. The run used to discover that at the moment
+// it tried to sample one -- "table public.categories is empty, so there is
+// nothing to point a foreign key at" -- by which point the tables ahead of it
+// in the insert order were already loaded, and repeating the run meant
+// emptying them again first.
+//
+// The full closure is known here: loading a table loads the tables its keys
+// point at, and theirs in turn. So either those tables are pulled into the run
+// or the run is refused naming all of them at once, before a row is written.
+//
+// A parent that already holds rows is left alone, which is the other half of
+// it: filling a child against a dimension table loaded by an earlier run is an
+// ordinary thing to do and has never needed the parent to be reloaded.
+func (cmd *RunCmd) resolveForeignKeyParents(tables []*db.Table) ([]*db.Table, error) {
+	inRun := func(name string) bool {
+		return slices.ContainsFunc(tables, func(t *db.Table) bool { return strings.EqualFold(t.Name, name) })
+	}
+
+	type need struct{ parent, child string }
+	missing := []need{}
+	seen := map[string]bool{}
+
+	// An empty parent has to be walked into whether or not it joins the run:
+	// filling it needs its own parents filled, and a refusal that names one
+	// level at a time is the diagnose-and-retry cycle this exists to remove.
+	// So the walk has its own queue, and only the run's table list is guarded
+	// by --fill-fk-parents.
+	queue := append([]*db.Table{}, tables...)
+	for i := 0; i < len(queue); i++ {
+		for _, constraint := range queue[i].Constraints {
+			// a table pointing at itself is in the run by definition, and the
+			// run already knows how to break that loop
+			if constraint.IsSelfReferencing() || constraint.ReferencedTable == nil {
+				continue
+			}
+			if inRun(constraint.ReferencedTableName) {
+				continue
+			}
+
+			parent := constraint.ReferencedTable
+			if seen[parent.FullName()] {
+				continue
+			}
+			seen[parent.FullName()] = true
+
+			filled, err := db.HasAnyRow(parent.Schema, parent.Name)
+			if err != nil {
+				return nil, err
+			}
+			if filled {
+				log.Debug().Str("table", queue[i].Name).Str("parent", parent.FullName()).
+					Msg("a foreign key points outside this run, at a table that already holds rows")
+				continue
+			}
+			queue = append(queue, parent)
+
+			if !cmd.FillFKParents {
+				missing = append(missing, need{parent: parent.FullName(), child: queue[i].FullName()})
+				continue
+			}
+
+			rows := valueForTable(cmd.Rows, cmd.RowsPerTable, parent.Name)
+			log.Info().Str("table", parent.FullName()).Int64("rows", rows).Str("neededBy", queue[i].FullName()).
+				Msgf("adding %s to this run, as --fill-fk-parents asks: %s points at it and it holds no row. It will be filled with %d rows",
+					parent.FullName(), queue[i].FullName(), rows)
+			tables = append(tables, parent)
+		}
+	}
+
+	if len(missing) == 0 {
+		return tables, nil
+	}
+
+	named := make([]string, 0, len(missing))
+	for _, m := range missing {
+		named = append(named, fmt.Sprintf("%s (pointed at by %s)", m.parent, m.child))
+	}
+	return nil, errors.Errorf("this run points foreign keys at tables it does not fill, and they hold no row: %s. A foreign key has nothing to point at, so the run would fail part way through with the tables ahead of them already loaded. Fill them first, or add them to this run with --fill-fk-parents", strings.Join(named, ", "))
 }
 
 // reportUnsupportedFields says out loud which columns this run cannot fill,

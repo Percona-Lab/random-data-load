@@ -204,3 +204,18 @@ func CountNonNullRows(schema, table string, fields []Field) (int64, error) {
 	}
 	return count, nil
 }
+
+// HasAnyRow reports whether a table holds anything at all.
+//
+// The question a foreign key asks of a parent is not how many rows it has but
+// whether it has one, and a count over a table that is already loaded is a
+// full scan for an answer the first row settles.
+func HasAnyRow(schema, table string) (bool, error) {
+	query := fmt.Sprintf("SELECT 1 FROM %s.%s LIMIT 1", Escape(schema), Escape(table))
+	var found int
+	err := DB.QueryRow(query).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, errors.Wrapf(err, "cannot tell whether %s.%s holds any row", schema, table)
+}
