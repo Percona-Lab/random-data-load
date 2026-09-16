@@ -674,10 +674,11 @@ func TestRun(t *testing.T) {
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}},
 		},
 
-		// The query filters on status='cancelled', so --query-param-freq
-		// registers it at its default of 0.1 so that the query returns rows.
-		// The export measured it at 0.0398. The measurement has to win: at 10%
-		// this is a sequential scan where the reported side had a bitmap scan.
+		// The query filters on status='cancelled' and the export measured that
+		// value at 0.0398. Nothing is inserted because a query mentions it, so
+		// the export is alone and the measurement is what comes out. Inserting
+		// it at 10% instead, as the default used to, is a sequential scan where
+		// the reported side had a bitmap scan.
 		{
 			name: "query_param_stat_file",
 			checkQuery: `select (count(*) = 50000)
@@ -687,6 +688,32 @@ func TestRun(t *testing.T) {
 			inputQuery: "select id, status from t1 where status = 'cancelled'",
 			engines:    []string{"pg"},
 			cmds:       [][]string{[]string{"--rows=50000", "--table=t1", "--null-freq=0", "--stat-file=tests/pg/query_param_stat_file.json"}},
+		},
+
+		// The same run with --query-param-freq set. That is an instruction
+		// rather than a measurement, so it overrides what the export says about
+		// the value it names -- and only about that value: 'shipped' is left
+		// where the export put it.
+		{
+			name: "query_param_stat_file",
+			checkQuery: `select (count(*) = 50000)
+				and (sum(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) between 12000 and 13000)
+				and (sum(CASE WHEN status = 'shipped' THEN 1 ELSE 0 END) between 30000 and 32000)
+				from t1;`,
+			inputQuery: "select id, status from t1 where status = 'cancelled'",
+			engines:    []string{"pg"},
+			cmds:       [][]string{[]string{"--rows=50000", "--table=t1", "--null-freq=0", "--query-param-freq=0.25", "--stat-file=tests/pg/query_param_stat_file.json"}},
+		},
+
+		// Nothing pins the query's literals at the default, so the column holds
+		// none of them and the query returns no row. The run says so rather
+		// than leaving an empty result to be worked back from.
+		{
+			name:       "query_params",
+			checkQuery: "select (count(*) = 20000) and (sum(CASE WHEN c2 in ('it', 'should', 'work') THEN 1 ELSE 0 END) = 0) from t1;",
+			inputQuery: "select * from t1 where c2 in ('it', 'should', 'work')",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=20000", "--table=t1", "--null-freq=0"}},
 		},
 
 		// tests/pg/fk_skew.json is what a dump holds for a foreign key column:
@@ -834,7 +861,7 @@ func TestRun(t *testing.T) {
 			checkQuery: "select (count(*) = 20000) AND (sum(CASE WHEN c2 = 'DHL' THEN 1 ELSE 0 END) between 5300 and 5900) from t1;",
 			inputQuery: "select * from t1 where c2 = 'DHL'",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=20000", "--table=t1", "--null-freq=0", "--values-freq-map=t1.c2=DHL:0.28"}},
+			cmds:       [][]string{[]string{"--rows=20000", "--table=t1", "--null-freq=0", "--query-param-freq=0.1", "--values-freq-map=t1.c2=DHL:0.28"}},
 		},
 	}
 

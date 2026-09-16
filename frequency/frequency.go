@@ -34,12 +34,6 @@ type Frequency struct {
 	// scanned pg_stats dump, so that an explicit flag is never overwritten by
 	// what the dump happens to say.
 	nullFromFlag bool
-
-	// indexDeliberate runs alongside IndexValues: true for a value someone
-	// asked for by name on the command line, false for one taken from a
-	// --query, which is a guess at a frequency rather than a statement of one.
-	// A measured frequency outranks the guess and not the instruction.
-	indexDeliberate []bool
 }
 
 type FrequencyNullParameter TableFrequency
@@ -189,18 +183,23 @@ func (c ColumnFrequency) InjectIndexValue(col string) (string, bool) {
 	return "", false
 }
 
-// MergeQueryParameters registers the literals a --query compares a column to,
-// so that the column actually holds some of them.
+// MergeQueryParameters pins the literals a --query compares a column to, so
+// that the column actually holds some of them.
 //
-// A value already given a frequency is left alone rather than registered a
-// second time: --values-freq-map is a deliberate selectivity, and the two
-// entries used to be drawn independently and add up, so pinning a value the
-// query also mentions overshot it. This is what the --stat-file merge already
-// does with the values postgres observed.
+// This is an instruction, not a measurement. The frequency is whatever
+// --query-param-freq was set to, which is a number nobody observed, so
+// everything merged afterwards leaves those values alone -- including an
+// imported export, which is the point: the caller asking for a literal at a
+// rate is overriding what the export says about it.
+//
+// Nothing is pinned unless --query-param-freq is set, and it defaults to 0. A
+// selectivity nobody measured is still a selectivity, and a run that quietly
+// applies one produces a plan that is wrong in a way no row count shows.
+//
+// A value already given a frequency is left alone rather than pinned a second
+// time: the two entries used to be drawn independently and add up, so pinning
+// a value --values-freq-map also names overshot it.
 func MergeQueryParameters(params map[string][]string, defaultFrequency float64) {
-	// --query-param-freq=0 disables the whole thing. Registering the literals
-	// with a frequency of zero would never insert them, but it would still
-	// claim them, and anything merged afterwards would leave them alone.
 	if defaultFrequency <= 0 {
 		return
 	}
@@ -224,9 +223,8 @@ func MergeQueryParameters(params map[string][]string, defaultFrequency float64) 
 					Msg("value already given a frequency on the command line, keeping that one instead of adding the query's")
 				continue
 			}
-			// a guess: --query-param-freq is a number nobody measured, and a
-			// dump that did measure this value replaces it later
-			freq.add(value, defaultFrequency, false)
+			freq.IndexValues = append(freq.IndexValues, value)
+			freq.IndexFrequencies = append(freq.IndexFrequencies, defaultFrequency)
 		}
 		colFreqMap[parts[1]] = freq
 		SharedTableFrequency[parts[0]] = colFreqMap
@@ -234,34 +232,25 @@ func MergeQueryParameters(params map[string][]string, defaultFrequency float64) 
 
 }
 
-// add records a value to inject, saying whether it was asked for by name or
-// guessed from a query.
-func (freq *Frequency) add(value string, share float64, deliberate bool) {
-	freq.IndexValues = append(freq.IndexValues, value)
-	freq.IndexFrequencies = append(freq.IndexFrequencies, share)
-
-	// The flag is only written once there is something to say, so an entry
-	// added before this existed reads as a guess, which is the safe way round.
-	for len(freq.indexDeliberate) < len(freq.IndexValues)-1 {
-		freq.indexDeliberate = append(freq.indexDeliberate, false)
-	}
-	freq.indexDeliberate = append(freq.indexDeliberate, deliberate)
-}
-
-// entryFor returns where this value already sits, or -1. An entry left at a
-// frequency of zero claims nothing: it would never be inserted, so treating it
-// as a decision would only silence whatever comes next.
-func (freq *Frequency) entryFor(value string) int {
-	for i, existing := range freq.IndexValues {
-		if existing == value && i < len(freq.IndexFrequencies) && freq.IndexFrequencies[i] > 0 {
-			return i
+// WillInsert reports whether anything is going to put this value in this
+// column: a --values-freq-map entry, a query literal pinned by
+// --query-param-freq, or an imported export listing it among the column's most
+// common values.
+//
+// A query whose predicate matches nothing returns no rows, and the caller has
+// to be told which predicate that was rather than left to work it out from an
+// empty result. Names are matched case-insensitively, because the query's
+// spelling and the catalog's need not agree.
+func WillInsert(table, column, value string) bool {
+	for haveTable, columns := range SharedTableFrequency {
+		if !strings.EqualFold(haveTable, table) {
+			continue
+		}
+		for haveColumn, freq := range columns {
+			if strings.EqualFold(haveColumn, column) && freq.claims(value) {
+				return true
+			}
 		}
 	}
-	return -1
-}
-
-// deliberate reports whether this entry was asked for by name rather than
-// guessed from a query.
-func (freq *Frequency) deliberate(i int) bool {
-	return i >= 0 && i < len(freq.indexDeliberate) && freq.indexDeliberate[i]
+	return false
 }

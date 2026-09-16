@@ -45,7 +45,7 @@ select sum(p.price), count(oi.*) from orders o join order_items oi on o.order_id
 An example of usage:
 
 ```
-$ time ./random-data-load run --engine=pg --host=127.0.0.1 --user=sbtest --password=sbtest --database=postgres --port=5432 --bulk-size=4500 --rows=500000 --default-relationship=binomial --coin-flip-percent=1  --query="select sum(p.price), count(oi.*) from orders o join order_items oi on o.order_id=oi.order_id join products p on p.id = oi.product_no where o.currency='EUR';" 
+$ time ./random-data-load run --engine=pg --host=127.0.0.1 --user=sbtest --password=sbtest --database=postgres --port=5432 --bulk-size=4500 --rows=500000 --default-relationship=binomial --coin-flip-percent=1 --query-param-freq=0.1 --query="select sum(p.price), count(oi.*) from orders o join order_items oi on o.order_id=oi.order_id join products p on p.id = oi.product_no where o.currency='EUR';" 
 Writing orders (337500/500000) rows...
 Writing orders (500000/500000) rows...
 Writing products (500000/500000) rows...
@@ -117,6 +117,7 @@ Common options:
 |--null-freq|Define how frequent nullable fields should be NULL, as a fraction between 0 and 1 (Default: 0.1)|
 |--null-freq-map|Define how frequent nullable fields should be NULL for a given column, as a fraction between 0 and 1 like --null-freq. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=0.73;t1.c2=0.04\" to set 73% or 4% of NULL for respective columns|
 |--values-freq-map|Inject arbitrary values at fixed frequencies. The format is "--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99" so that val1 will be on 75% of rows and val2 on 23% for column c1|
+|--query-param-freq|Insert the literals the `--query` compares a column to, on this fraction of the rows, so the query returns something. Defaults to 0: it is a selectivity nobody measured, so it is only applied when asked for, and it then overrides anything `--stat-file` says about those values. The run names the predicates nothing will match|
 |--stat-file|Scan a column statistics export and reuse its null_frac, most_common_vals and most_common_freqs instead of setting --null-freq-map and --values-freq-map by hand. Use the `export-stat` subcommand to get the command producing that file|
 |--min-generated-time|Generated timestamps will be after this date. Format is RFC3339. Will default to --max-generated-time - 1 year|
 |--max-generated-time|Generated timestamps will be before this date. Format is RFC3339. Will default to now()|
@@ -426,16 +427,15 @@ A few things worth knowing:
   contributes on its own, so the result lands on what was measured rather than above it.
   Only single-column keys: the common values of one column of a composite key say how
   often that column repeats, not how often the pair does
-- `--null-freq-map` and `--values-freq-map` win: a value given a frequency **by name**
-  is a decision, and the export does not overrule it
-- a literal taken from `--query` does **not** win. `--query-param-freq` registers it at
-  a default of 0.1 so the query returns rows at all, which is a guess at a number nobody
-  measured; when the export measured that same value, the measurement replaces the guess
-  and the run says so. `status='cancelled'` at 10% instead of 3.98% is a sequential scan
-  where the reported side had a bitmap scan
-- a query literal the export does not list among the column's most common values is
-  warned about: it is rarer than the rarest one listed, so 0.1 is far too large for it
-  and nothing here can say by how much
+- `--null-freq-map`, `--values-freq-map` and `--query-param-freq` win. Each of them is
+  an instruction and the export is a measurement, so setting one is how you override
+  what the export says about a value. In particular `--query-param-freq` is how you
+  force a query to return rows whatever the export measured
+- **`--query-param-freq` defaults to 0**, so by default the export is the only thing
+  speaking for a column. Inserting a literal on 10% of the rows because a query mentions
+  it is a selectivity nobody measured, and it used to win over the measured one:
+  `status='cancelled'` at 10% instead of 3.98% is a sequential scan where the reported
+  side had a bitmap scan
 - a value is never counted twice, whichever of them it came from
 - a column postgres recorded no NULL for gets none, rather than falling back to
   `--null-freq`
@@ -704,7 +704,7 @@ Without clear plan:
 - a unique key whose columns come from several foreign keys is filled from all of them at once, walking the combinations their parents can make, instead of each key walking its own parent and the pair repeating as soon as the shortest walk came round; asking for more rows than those parents can make combinations is refused up front
 - a run whose tables point foreign keys at tables it does not fill is refused before anything is written, in one message naming the whole closure, instead of failing part way through with some tables already loaded; `--fill-fk-parents` adds those tables to the run instead
 - `--stat-file` no longer tries to insert the source database's parent ids into a foreign key column, which pointed it at rows that do not exist; the key's measured skew is reproduced instead, by sampling that share of the child's rows from one parent row each
-- a frequency measured by `--stat-file` now wins over the one `--query-param-freq` guesses for the same value, instead of the guess silently standing; a value pinned by name with `--values-freq-map` still wins over both, and a query literal the export does not list at all is warned about
+- `--query-param-freq` now defaults to 0 and is an override rather than a guess: nothing is inserted because a query mentions it unless you ask, and asking overrides what `--stat-file` measured for those values. A predicate no row will match is named in a warning, so an empty result explains itself
 
 #### 0.2.3
 - NULL and/or fixed values can be injected at tunable rates

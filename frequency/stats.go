@@ -143,22 +143,9 @@ func (freq *Frequency) keepKeySkew(cs ColumnStats, target Target) {
 			target.Table, target.Column, len(kept), kept[0])
 }
 
-// mergeCommonValues takes the most common values and their observed
-// frequencies, keeping the frequencies as-is: InjectIndexValue already draws
-// value i with probability MostCommonFreqs[i], which is exactly what pg_stats
-// measured.
-//
-// A value the query also mentions is the interesting case. --query-param-freq
-// registers every literal a query compares a column to, at a default of 0.1,
-// so that the query returns rows at all -- a number nobody measured and that
-// happens to be wrong by whatever the real frequency is. It used to win:
-// status='cancelled' landed at 10% where the dump says 3.98%, which is a
-// sequential scan where the customer had a bitmap scan. Every run of the study
-// that used --stat-file had to find --query-param-freq=0 for itself, some of
-// them after a full reload.
-//
-// So a measurement replaces a guess, and only a guess: a value given a
-// frequency by name on the command line is a decision and still wins.
+// mergeCommonValues appends the most common values, keeping their observed
+// frequencies as-is: InjectIndexValue already draws value i with probability
+// MostCommonFreqs[i], which is exactly what pg_stats measured.
 func (freq *Frequency) mergeCommonValues(cs ColumnStats, table, column string) {
 	count := min(len(cs.MostCommonVals), len(cs.MostCommonFreqs))
 	if count != len(cs.MostCommonVals) || count != len(cs.MostCommonFreqs) {
@@ -167,65 +154,30 @@ func (freq *Frequency) mergeCommonValues(cs ColumnStats, table, column string) {
 			Msg("most_common_vals and most_common_freqs have different lengths in the dump, using the shorter one")
 	}
 
-	measured := map[string]bool{}
-	rarest := 0.0
 	for i := 0; i < count; i++ {
 		if cs.MostCommonFreqs[i] <= 0 {
 			continue
 		}
-		value, share := cs.MostCommonVals[i], cs.MostCommonFreqs[i]
-		measured[value] = true
-		if rarest == 0 || share < rarest {
-			rarest = share
-		}
-
-		at := freq.entryFor(value)
-		switch {
-		case at < 0:
-			freq.add(value, share, false)
-		case freq.deliberate(at):
-			log.Debug().Str("table", table).Str("column", column).Str("value", value).
-				Msg("value already given a frequency by name on the command line, keeping that one")
-		case freq.IndexFrequencies[at] != share:
-			log.Info().Str("table", table).Str("column", column).Str("value", value).
-				Float64("guessed", freq.IndexFrequencies[at]).Float64("measured", share).
-				Msgf("%s.%s = %q was guessed at %g from the query and measured at %g in the export, keeping the measured one",
-					table, column, value, freq.IndexFrequencies[at], share)
-			freq.IndexFrequencies[at] = share
-		}
-	}
-
-	freq.reportGuessesTheExportDidNotMeasure(measured, rarest, table, column)
-}
-
-// reportGuessesTheExportDidNotMeasure warns about a value taken from the query
-// that the export has nothing to say about.
-//
-// The export lists the most common values of the column, so a value missing
-// from it is rarer than the rarest one listed. --query-param-freq's default of
-// 0.1 is then not merely unmeasured but far too large, and there is nothing
-// here that can put a number on it -- only say so.
-func (freq *Frequency) reportGuessesTheExportDidNotMeasure(measured map[string]bool, rarest float64, table, column string) {
-	// An export with no common values for a column says nothing about any
-	// value of it, so there is nothing to conclude from a value being absent.
-	if len(measured) == 0 {
-		return
-	}
-
-	for i, value := range freq.IndexValues {
-		if freq.deliberate(i) || measured[value] || freq.IndexFrequencies[i] <= 0 {
+		if freq.claims(cs.MostCommonVals[i]) {
+			log.Debug().Str("table", table).Str("column", column).Str("value", cs.MostCommonVals[i]).
+				Msg("value already given a frequency on the command line or by the query, keeping that one")
 			continue
 		}
-		log.Warn().Str("table", table).Str("column", column).Str("value", value).
-			Float64("guessed", freq.IndexFrequencies[i]).Float64("rarestMeasured", rarest).
-			Msgf("%s.%s = %q comes from the query and is being inserted on %g of the rows, but the export does not list it among the column's most common values, so it is rarer than %g there. Lower --query-param-freq, or set it to 0 to keep only what was measured",
-				table, column, value, freq.IndexFrequencies[i], rarest)
+		freq.IndexValues = append(freq.IndexValues, cs.MostCommonVals[i])
+		freq.IndexFrequencies = append(freq.IndexFrequencies, cs.MostCommonFreqs[i])
 	}
 }
 
-// claims reports whether the value is already going to be inserted.
+// claims reports whether the value is already going to be inserted. An entry
+// left at a frequency of zero claims nothing: it would never be inserted, so
+// treating it as a decision would only silence the dump.
 func (freq *Frequency) claims(value string) bool {
-	return freq.entryFor(value) >= 0
+	for i, existing := range freq.IndexValues {
+		if existing == value && i < len(freq.IndexFrequencies) && freq.IndexFrequencies[i] > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeNullFraction scales null_frac up before storing it.

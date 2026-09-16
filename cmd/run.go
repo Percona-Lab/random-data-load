@@ -43,7 +43,7 @@ type RunCmd struct {
 	NullFreq          float64                                 `name:"null-freq" help:"Define how frequent nullable fields should be NULL by default." default:"0.1"`
 	NullFreqMap       frequency.FrequencyNullParameter        `name:"null-freq-map" help:"Define how frequent nullable fields should be NULL for a given column, as a fraction between 0 and 1 like --null-freq. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=0.73;t1.c2=0.04\" to set 73% or 4% of NULL for respective columns" default:""`
 	ValuesFreqMap     frequency.FrequencyIndexValuesParameter `name:"values-freq-map" help:"Inject arbitrary values at fixed frequencies. The format is \"--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99\" so that val1 will be on 75% of rows and val2 on 23% for column c1" default:""` // TODO we're not checking if the total freq is above 1
-	QueryParamsFreq   float64                                 `name:"query-param-freq" help:"Frequency at which to insert arbitrary values guessed from the query parameters. = and IN operators are handled. Can be disabled when set to 0.0." default:"0.1"`
+	QueryParamsFreq   float64                                 `name:"query-param-freq" help:"Insert the literals the --query compares a column to, on this fraction of the rows, so that the query returns something. = and IN operators are handled. It is a selectivity nobody measured, so it is off by default and overrides anything --stat-file says about those values when you do set it. The run names the predicates nothing will match." default:"0"`
 	TargetBytesPerRow generate.PerTableFloat                  `name:"target-bytes-per-row" help:"Aim the rows of a table at an average width, in bytes, by writing longer or shorter values into its free-text columns. It is the figure a plan's \"width=\" is built from, and the one that decides how many rows fit in a page. Can be given per table: --target-bytes-per-row=\"97;order_items=24\"" default:""`
 	TargetRelpages    generate.PerTableFloat                  `name:"target-relpages" help:"Aim a table at a page count instead, which --rows and postgres' page layout turn into a row width. Page count is what a sequential scan's cost is built from, so it is usually the figure a reproduction has to hit. Can be given per table: --target-relpages=\"orders=12345\". Postgres only. " default:""`
 
@@ -180,6 +180,8 @@ func (cmd *RunCmd) Run() error {
 			return errors.Errorf("table %s has a foreign key loop", table.Name)
 		}
 	}
+
+	reportPredicatesNothingWillMatch(tables, queryParams)
 
 	// and identify which constraints should be "garanteed" for this run
 	for _, table := range tables {
@@ -369,6 +371,66 @@ func (cmd *RunCmd) resolveForeignKeyParents(tables []*db.Table) ([]*db.Table, er
 		named = append(named, fmt.Sprintf("%s (pointed at by %s)", m.parent, m.child))
 	}
 	return nil, errors.Errorf("this run points foreign keys at tables it does not fill, and they hold no row: %s. A foreign key has nothing to point at, so the run would fail part way through with the tables ahead of them already loaded. Fill them first, or add them to this run with --fill-fk-parents", strings.Join(named, ", "))
+}
+
+// reportPredicatesNothingWillMatch names the literals the query filters on that
+// no row is going to hold.
+//
+// --query-param-freq is off by default, so a predicate on a column nothing else
+// speaks for matches nothing and the query comes back empty. That is the honest
+// outcome -- inserting a value on 10% of the rows because a query mentions it
+// is a selectivity nobody measured, and a plan built on one is wrong in a way
+// no row count shows -- but it is only useful if the run says which predicate
+// it was, rather than leaving an empty result to be worked back from.
+func reportPredicatesNothingWillMatch(tables []*db.Table, queryParams map[string][]string) {
+	for tableColumn, values := range queryParams {
+		table, column, ok := resolveQueryParameter(tables, tableColumn)
+		if !ok {
+			continue
+		}
+
+		// A key holds whatever its parent holds. No option puts a chosen value
+		// in it, so pointing at --query-param-freq would be wrong advice.
+		if table.IsFieldInAnyConstraints(*column) {
+			log.Warn().Str("table", table.Name).Str("column", column.ColumnName).Strs("values", values).
+				Msgf("%s.%s is a foreign key, so it holds what its parent holds and the query's %v cannot be put in it. The query only matches if the parent was filled with those values",
+					table.Name, column.ColumnName, values)
+			continue
+		}
+
+		unmatched := []string{}
+		for _, value := range values {
+			if !frequency.WillInsert(table.Name, column.ColumnName, value) {
+				unmatched = append(unmatched, value)
+			}
+		}
+		if len(unmatched) == 0 {
+			continue
+		}
+		log.Warn().Str("table", table.Name).Str("column", column.ColumnName).Strs("values", unmatched).
+			Msgf("nothing will put %v in %s.%s, so the query filtering on it returns no row. --query-param-freq=0.1 inserts each of them on 10%% of the rows, --values-freq-map sets a rate per value, and --stat-file uses the rates an export measured",
+				unmatched, table.Name, column.ColumnName)
+	}
+}
+
+// resolveQueryParameter finds the column a "table.column" key of the parsed
+// query stands for, among the tables this run fills.
+func resolveQueryParameter(tables []*db.Table, tableColumn string) (*db.Table, *db.Field, bool) {
+	name, columnName, found := strings.Cut(tableColumn, ".")
+	if !found {
+		return nil, nil, false
+	}
+	for _, table := range tables {
+		if !strings.EqualFold(table.Name, name) {
+			continue
+		}
+		field := table.FieldByName(columnName)
+		if field == nil {
+			return nil, nil, false
+		}
+		return table, field, true
+	}
+	return nil, nil, false
 }
 
 // reportUnsupportedFields says out loud which columns this run cannot fill,

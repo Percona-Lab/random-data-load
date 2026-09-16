@@ -124,21 +124,11 @@ func TestMergeStats(t *testing.T) {
 			wantNull: 0.3,
 		},
 		{
-			// asked for by name: a decision, and not one the dump overrules
-			name:      "a value given a frequency on the command line keeps it, and is not listed twice",
-			existing:  ColumnFrequency{"c1": {IndexValues: []string{"a"}, IndexFrequencies: []float64{0.8}, indexDeliberate: []bool{true}}},
+			name:      "a value already carrying a frequency is not given a second one",
+			existing:  ColumnFrequency{"c1": {IndexValues: []string{"a"}, IndexFrequencies: []float64{0.8}}},
 			stats:     []ColumnStats{{Tablename: "t1", Attname: "c1", MostCommonVals: []string{"a", "b"}, MostCommonFreqs: []float64{0.5, 0.2}}},
 			wantVals:  []string{"a", "b"},
 			wantFreqs: []float64{0.8, 0.2},
-		},
-		{
-			// taken from a --query at --query-param-freq: a guess at a number
-			// nobody measured, and the dump measured it
-			name:      "a value guessed from the query takes the frequency the dump measured",
-			existing:  ColumnFrequency{"c1": {IndexValues: []string{"a"}, IndexFrequencies: []float64{0.1}, indexDeliberate: []bool{false}}},
-			stats:     []ColumnStats{{Tablename: "t1", Attname: "c1", MostCommonVals: []string{"a", "b"}, MostCommonFreqs: []float64{0.5, 0.2}}},
-			wantVals:  []string{"a", "b"},
-			wantFreqs: []float64{0.5, 0.2},
 		},
 		{
 			name:      "a value left at a frequency of zero claims nothing",
@@ -267,57 +257,6 @@ func TestMergeStatsReproducesTheDump(t *testing.T) {
 	}
 }
 
-// The bug this replaced: --query-param-freq registers every literal a query
-// compares a column to, at a default of 0.1, and that guess used to outrank the
-// frequency the export measured. status='cancelled' at 10% instead of 3.98% is
-// a sequential scan where the reported side had a bitmap scan.
-func TestMeasuredFrequencyOutranksTheQueryGuess(t *testing.T) {
-	SharedTableFrequency = map[string]ColumnFrequency{}
-	MergeQueryParameters(map[string][]string{"orders.status": {"cancelled"}}, 0.1)
-
-	if got := SharedTableFrequency["orders"]["status"].IndexFrequencies; !reflect.DeepEqual(got, []float64{0.1}) {
-		t.Fatalf("the query literal was registered at %v, want [0.1]", got)
-	}
-
-	MergeStats([]ColumnStats{{
-		Tablename: "orders", Attname: "status",
-		MostCommonVals: []string{"shipped", "cancelled"}, MostCommonFreqs: []float64{0.62, 0.0398},
-	}}, sameTable)
-
-	freq := SharedTableFrequency["orders"]["status"]
-	at := freq.entryFor("cancelled")
-	if at < 0 {
-		t.Fatalf("cancelled is no longer being inserted at all: %v %v", freq.IndexValues, freq.IndexFrequencies)
-	}
-	if freq.IndexFrequencies[at] != 0.0398 {
-		t.Errorf("cancelled is inserted at %g, the export measured 0.0398", freq.IndexFrequencies[at])
-	}
-	// and it is still only listed once
-	if len(freq.IndexValues) != 2 {
-		t.Errorf("values = %q, want shipped and cancelled once each", freq.IndexValues)
-	}
-}
-
-// A value pinned by name is a decision rather than a guess, so the export does
-// not overrule it even though it measured something else.
-func TestNamedFrequencyOutranksTheExport(t *testing.T) {
-	SharedTableFrequency = map[string]ColumnFrequency{}
-	SharedTableFrequency["orders"] = ColumnFrequency{"status": {}}
-	freq := SharedTableFrequency["orders"]["status"]
-	freq.add("cancelled", 0.28, true)
-	SharedTableFrequency["orders"]["status"] = freq
-
-	MergeStats([]ColumnStats{{
-		Tablename: "orders", Attname: "status",
-		MostCommonVals: []string{"cancelled"}, MostCommonFreqs: []float64{0.0398},
-	}}, sameTable)
-
-	got := SharedTableFrequency["orders"]["status"]
-	if got.IndexFrequencies[0] != 0.28 {
-		t.Errorf("cancelled is inserted at %g, --values-freq-map asked for 0.28", got.IndexFrequencies[0])
-	}
-}
-
 // A foreign key column's values cannot be inserted, only its skew kept.
 func TestForeignKeyColumnKeepsOnlyItsSkew(t *testing.T) {
 	SharedTableFrequency = map[string]ColumnFrequency{}
@@ -332,5 +271,64 @@ func TestForeignKeyColumnKeepsOnlyItsSkew(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.KeyFrequencies, []float64{0.31, 0.12}) {
 		t.Errorf("key frequencies = %v, want [0.31 0.12]", got.KeyFrequencies)
+	}
+}
+
+// --query-param-freq is an instruction rather than a guess: a value it pins is
+// one the caller asked for by name, so an export measuring something else for
+// it does not overrule it. Which is only reachable deliberately now, since
+// nothing is pinned at the default.
+func TestAPinnedQueryLiteralOutranksTheExport(t *testing.T) {
+	SharedTableFrequency = map[string]ColumnFrequency{}
+	MergeQueryParameters(map[string][]string{"orders.status": {"cancelled"}}, 0.1)
+
+	MergeStats([]ColumnStats{{
+		Tablename: "orders", Attname: "status",
+		MostCommonVals: []string{"shipped", "cancelled"}, MostCommonFreqs: []float64{0.62, 0.0398},
+	}}, sameTable)
+
+	freq := SharedTableFrequency["orders"]["status"]
+	if !reflect.DeepEqual(freq.IndexValues, []string{"cancelled", "shipped"}) {
+		t.Fatalf("values = %q, want cancelled and shipped once each", freq.IndexValues)
+	}
+	if freq.IndexFrequencies[0] != 0.1 {
+		t.Errorf("cancelled is inserted at %g, --query-param-freq asked for 0.1", freq.IndexFrequencies[0])
+	}
+}
+
+// At the default nothing is pinned, so the export is the only thing speaking
+// for the column and the measured frequency is what the run produces.
+func TestTheExportIsAloneAtTheDefault(t *testing.T) {
+	SharedTableFrequency = map[string]ColumnFrequency{}
+	MergeQueryParameters(map[string][]string{"orders.status": {"cancelled"}}, 0)
+
+	MergeStats([]ColumnStats{{
+		Tablename: "orders", Attname: "status",
+		MostCommonVals: []string{"shipped", "cancelled"}, MostCommonFreqs: []float64{0.62, 0.0398},
+	}}, sameTable)
+
+	freq := SharedTableFrequency["orders"]["status"]
+	if !reflect.DeepEqual(freq.IndexFrequencies, []float64{0.62, 0.0398}) {
+		t.Errorf("frequencies = %v, want the measured [0.62 0.0398]", freq.IndexFrequencies)
+	}
+}
+
+func TestWillInsert(t *testing.T) {
+	SharedTableFrequency = map[string]ColumnFrequency{}
+	MergeQueryParameters(map[string][]string{"orders.status": {"cancelled"}}, 0.1)
+
+	if !WillInsert("orders", "status", "cancelled") {
+		t.Error("a value pinned at 0.1 is reported as never inserted")
+	}
+	if WillInsert("orders", "status", "shipped") {
+		t.Error("a value nothing pins is reported as inserted")
+	}
+	if WillInsert("orders", "region", "EMEA") {
+		t.Error("a column nothing pins is reported as inserted")
+	}
+	// a column matched whatever the spelling, since the query and the catalog
+	// need not agree on case
+	if !WillInsert("ORDERS", "Status", "cancelled") {
+		t.Error("the lookup is case sensitive")
 	}
 }
