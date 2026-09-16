@@ -160,47 +160,19 @@ func logOnce(key string, f func()) {
 }
 
 // fillFromRowNumbers reads the parent rows sitting at these positions and
-// writes them into the values, one per row of the bulk.
+// writes them into the bulk: offsets[i] is the position to read, targets[i] the
+// row of the bulk it belongs to. A caller filling every row in order passes the
+// rows themselves; one filling a scattered few passes just those.
 //
 // The positions repeat -- a parent that advances once every thousand rows is
 // asked for the same row a thousand times -- so they are read once each and
 // then handed to every row that wanted them. The getters are only ever read
 // from after this, so sharing one between rows is safe.
-func (p *sampleCommon) fillFromRowNumbers(offsets []int64) error {
+func (p *sampleCommon) fillFromRowNumbers(targets []int, offsets []int64) error {
 	wanted := map[int64]bool{}
 	numbers := []string{}
 	for _, offset := range offsets {
 		number := offset + 1 // ROW_NUMBER() starts at one, an OFFSET at zero
-		if wanted[number] {
-			continue
-		}
-		wanted[number] = true
-		numbers = append(numbers, strconv.FormatInt(number, 10))
-	}
-
-	rows, err := p.rowsByNumber(numbers)
-	if err != nil {
-		return err
-	}
-
-	for row, offset := range offsets {
-		values, found := rows[offset+1]
-		if !found {
-			return errors.Errorf("row %d of %s.%s was needed to fill the key of a row and did not come back, though the table was counted at %d usable rows",
-				offset+1, p.schema, p.table, p.tableSize)
-		}
-		copy(p.values[row], values)
-	}
-	return nil
-}
-
-// fillRowsFromRowNumbers is the same, for a caller filling only some of the
-// rows: targets[i] is the row of the bulk that offsets[i] belongs to.
-func (p *sampleCommon) fillRowsFromRowNumbers(targets []int, offsets []int64) error {
-	wanted := map[int64]bool{}
-	numbers := []string{}
-	for _, offset := range offsets {
-		number := offset + 1
 		if wanted[number] {
 			continue
 		}

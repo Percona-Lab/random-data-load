@@ -120,13 +120,20 @@ func (s *CompositeKeySample) Sample() error {
 				s.key, s.cursor.capacity, s.child)
 	}
 
+	// every row of the bulk takes a combination, so the rows each part fills
+	// are all of them, in order; the same list serves every part
+	targets := make([]int, rows)
+	for row := range targets {
+		targets[row] = row
+	}
+
 	for _, part := range s.parts {
 		offsets := make([]int64, rows)
 		for row := int64(0); row < rows; row++ {
 			position := (start + row) % s.cursor.capacity
 			offsets[row] = (position / part.weight) % part.tableSize
 		}
-		if err := part.fillFromRowNumbers(offsets); err != nil {
+		if err := part.fillFromRowNumbers(targets, offsets); err != nil {
 			return err
 		}
 	}

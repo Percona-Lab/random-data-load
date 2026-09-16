@@ -56,7 +56,7 @@ func (s *SkewedSample) Sample() error {
 			rows = append(rows, row)
 		}
 	}
-	return s.fillRowsFromRowNumbers(rows, offsets)
+	return s.fillFromRowNumbers(rows, offsets)
 }
 
 // draw picks which of the hot parent rows this child row points at, if any.
