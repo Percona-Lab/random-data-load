@@ -34,16 +34,16 @@ type Insert struct {
 }
 
 type ForeignKeyLinks struct {
-	DefaultRelationship string            `name:"default-relationship" help:"Will define the default foreign-key relationship to apply. Possible values: ${BinomialFlag},${SequentialFlag}. The default relation can be overriden with other parameters --${BinomialFlag} or --${SequentialFlag}" enum:"${BinomialFlag},${SequentialFlag},${NormalFlag},${ParetoFlag}" default:"${BinomialFlag}"`
-	Binomial            map[string]string ` help:"Defines a 1-N foreign key relationships using repeated coin flips. Postgres' tablesamples Bernouilli or mysql RAND() < 0.1 (can be tuned with --coin-flip-percent). Format should be \"parent_table=child_table\" E.g: --${BinomialFlag}=\"customers=orders;orders=items\""`
-	Sequential          map[string]string `name:"sequential" help:"Defines a sequential foreign key links relationships, using SELECT ... LIMIT x OFFET y. Format should be \"parent_table=child_table\" E.g: --${SequentialFlag}=\"citizens=ssns\""`
-	CoinFlipPercent     PerTableFloat     `name:"coin-flip-percent" help:"When used with ${BinomialFlag}, it will set the likeliness of each rows to be sampled or not. 10 would mean each rows have only 10% chance to be selected when sampling a parent table. Using large values will favor hot rows: the coin flips are done with a table full scan, with a limit set at --bulk-size, so with a large percent chance most of the time the first rows will be selected. No effects when used with --${SequentialFlag}. Lower value (e.g 0.001) will also slow down the sampling speed. The right value depends on the parent being sampled, so it can be given per parent table: --coin-flip-percent=\"1;orders=3;products=5\"" default:"1"`
-	Normal              map[string]string `help:"Defines a 1-N foreign key relationships using box-muller transformation to provide normal distribution. Slow method needing full table scans for each samples."`
-	NormalStddev        PerTableFloat     `help:"Standard deviation to the normal law. Will default to 1/10 of the row count of the parent table being sampled. Can be given per parent table: --normal-stddev=\"orders=5000;products=250\""`
-	NormalMean          PerTableFloat     `help:"Mean of the normal law. Will default to the middle of the parent table being sampled. Can be given per parent table: --normal-mean=\"orders=50000;products=1500\""`
-	Pareto              map[string]string `help:"Defines a 1-N foreign key relationships using zipf (pareto) distribution. Slow method needing full table scans for each samples"`
-	ParetoS             PerTableFloat     `help:"Zipf slope parameter. Must be above 1. Higher value will mean faster decay, so first rows will be hotter. Can be given per parent table: --pareto-s=\"1.1;orders=1.4\"" default:"1.1"`
-	ParetoV             PerTableFloat     `help:"Must be >=1. Directly map to V, https://pkg.go.dev/math/rand#Zipf. Can be given per parent table." default:"1.0"`
+	DefaultRelationship string            `name:"default-relationship" help:"Sampler for every foreign key, overridden per key by the four flags below." enum:"${BinomialFlag},${SequentialFlag},${NormalFlag},${ParetoFlag}" default:"${BinomialFlag}"`
+	Binomial            map[string]string ` help:"Sample these keys by coin flip, the usual 1:N: --${BinomialFlag}=\"customers=orders;orders=items\""`
+	Sequential          map[string]string `name:"sequential" help:"Sample these keys in order, for a flat fan-out: --${SequentialFlag}=\"citizens=ssns\""`
+	CoinFlipPercent     PerTableFloat     `name:"coin-flip-percent" help:"Chance each parent row is picked, for ${BinomialFlag}. Depends on the parent: --coin-flip-percent=\"1;orders=3\"" default:"1"`
+	Normal              map[string]string `help:"Sample these keys on a bell curve. Slow: a full scan per sample."`
+	NormalStddev        PerTableFloat     `help:"Standard deviation. Defaults to a tenth of the parent's rows: --normal-stddev=\"orders=5000\""`
+	NormalMean          PerTableFloat     `help:"Mean. Defaults to the middle of the parent: --normal-mean=\"orders=50000\""`
+	Pareto              map[string]string `help:"Sample these keys on a zipf curve, a hot head and a long tail. Slow: a full scan per sample."`
+	ParetoS             PerTableFloat     `help:"Zipf slope, above 1. Higher decays faster, so the first rows run hotter: --pareto-s=\"1.1;orders=1.4\"" default:"1.1"`
+	ParetoV             PerTableFloat     `help:"Zipf V, at least 1. See https://pkg.go.dev/math/rand#Zipf" default:"1.0"`
 }
 
 const (
