@@ -21,31 +21,32 @@ import (
 type RunCmd struct {
 	DB db.Config `embed:""`
 
-	Table            string               `help:"Table to insert to. When using --query, --table will be used to restrict the tables to insert to."`
-	Rows             generate.PerTableInt `name:"rows" required:"true" placeholder:"N|table=N" help:"Number of rows to insert. One number for every table, or per table, or both: --rows=\"1000;orders=500000;order_items=1500000\""`
+	TuningHelp       tuningHelpFlag       `name:"help-tuning" help:"Explain what each tuning flag moves, and exit."`
+	Table            string               `help:"Table to insert to. With --query, restricts the run to this table."`
+	Rows             generate.PerTableInt `name:"rows" required:"true" placeholder:"N|table=N" help:"Rows to insert, for every table or per table: --rows=\"1000;orders=500000\""`
 	BulkSize         int64                `name:"bulk-size" help:"Number of rows per insert statement" default:"1000"`
 	DryRun           bool                 `name:"dry-run" help:"Print queries to the standard output instead of inserting them into the db"`
-	Truncate         bool                 `name:"truncate" help:"Empty the tables this run fills before inserting into them. Without it a second run adds to what the first one left, which is rarely what tuning a run wants. Never touches a table this run does not fill: a foreign key pointing in from outside makes it refuse rather than cascade."`
+	Truncate         bool                 `name:"truncate" help:"Empty the tables this run fills before inserting. Refuses rather than cascading."`
 	Quiet            bool                 `name:"quiet" help:"Do not print progress bar"`
-	WorkersCount     int                  `name:"workers" help:"How many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time" default:"3"`
+	WorkersCount     int                  `name:"workers" help:"How many workers to spawn. Only generation and sampling are parallelized" default:"3"`
 	MaxTextSize      int64                `help:"Limit the maximum size of long text, varchar and blob fields." default:"65535"`
 	UUIDVersion      int                  `name:"uuid-version" help:"UUID v4 or v7 for uuid datatypes" default:"4" enum:"4,7"`
-	MinGeneratedTime time.Time            `help:"Generated timestamps will be after this date. Format is RFC3339. Will default to --max-generated-time - 1 year"`
-	MaxGeneratedTime time.Time            `help:"Generated timestamps will be before this date. Format is RFC3339. Will default to now()"`
-	Query            string               `help:"Providing a query will enable to automatically discover the schema, insert recursively into tables, enforce implicit joins."`
+	MinGeneratedTime time.Time            `help:"Generated timestamps will be after this date. RFC3339. Defaults to --max-generated-time - 1 year"`
+	MaxGeneratedTime time.Time            `help:"Generated timestamps will be before this date. RFC3339. Defaults to now()"`
+	Query            string               `help:"The query to reproduce. Discovers the tables, the columns and the joins' implied foreign keys."`
 
 	generate.ForeignKeyLinks
-	AddForeignKeys    query.VirtualJoins                      `name:"add-fk" help:"Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk=\"parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]\". Example: --add-fk=\"customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id\""`
-	FillFKParents     bool                                    `name:"fill-fk-parents" help:"Add the tables a foreign key points at to this run when they hold no row, filling them with --rows. Without it, such a run is refused up front naming them, rather than failing part way through with some tables already loaded."`
-	NoFKGuess         bool                                    `name:"no-fk-guess" help:"Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-fk." `
-	NoSkipFields      bool                                    `name:"no-skip-fields" help:"Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found."`
-	NullFreq          generate.PerTableFloat                  `name:"null-freq" help:"How often a nullable column is NULL, as a fraction between 0 and 1. One number for every column, or per column, or both: --null-freq=\"0.1;items.tags=0.73;items.price=0\"" default:"0.1"`
-	ValuesFreqMap     frequency.FrequencyIndexValuesParameter `name:"values-freq-map" help:"Inject arbitrary values at fixed frequencies. The format is \"--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99\" so that val1 will be on 75% of rows and val2 on 23% for column c1" default:""` // TODO we're not checking if the total freq is above 1
-	QueryParamsFreq   float64                                 `name:"query-param-freq" help:"Insert the literals the --query compares a column to, on this fraction of the rows, so that the query returns something. = and IN operators are handled. It is a selectivity nobody measured, so it is off by default and overrides anything --stat-file says about those values when you do set it. The run names the predicates nothing will match." default:"0"`
-	TargetBytesPerRow generate.PerTableFloat                  `name:"target-bytes-per-row" help:"Aim the rows of a table at an average width, in bytes, by writing longer or shorter values into its free-text columns. It is the figure a plan's \"width=\" is built from, and the one that decides how many rows fit in a page. Can be given per table: --target-bytes-per-row=\"97;order_items=24\"" default:""`
-	TargetRelpages    generate.PerTableFloat                  `name:"target-relpages" help:"Aim a table at a page count instead, which --rows and postgres' page layout turn into a row width. Page count is what a sequential scan's cost is built from, so it is usually the figure a reproduction has to hit. Can be given per table: --target-relpages=\"orders=12345\". Postgres only. " default:""`
+	AddForeignKeys    query.VirtualJoins                      `name:"add-fk" help:"Foreign keys the schema does not declare and the query does not imply: --add-fk=\"customers.id=orders.customer_id\""`
+	FillFKParents     bool                                    `name:"fill-fk-parents" help:"Also fill the empty tables a foreign key points at, instead of refusing the run."`
+	NoFKGuess         bool                                    `name:"no-fk-guess" help:"Stick to the foreign keys the database declares, ignoring what the --query implies."`
+	NoSkipFields      bool                                    `name:"no-skip-fields" help:"Generate every column, not only the ones the --query names. Usually needed: it sets the row width."`
+	NullFreq          generate.PerTableFloat                  `name:"null-freq" help:"How often a nullable column is NULL, for every column or per column: --null-freq=\"0.1;items.tags=0.73\"" default:"0.1"`
+	ValuesFreqMap     frequency.FrequencyIndexValuesParameter `name:"values-freq-map" help:"Inject values at fixed frequencies: --values-freq-map=\"t1.c1=val1:0.75,val2:0.23\"" default:""` // TODO we're not checking if the total freq is above 1
+	QueryParamsFreq   float64                                 `name:"query-param-freq" help:"Insert the --query's literals on this fraction of the rows, so it returns something. Off by default." default:"0"`
+	TargetBytesPerRow generate.PerTableFloat                  `name:"target-bytes-per-row" help:"Aim a table at an average row width in bytes, the plan's \"width=\": --target-bytes-per-row=\"97;order_items=24\"" default:""`
+	TargetRelpages    generate.PerTableFloat                  `name:"target-relpages" help:"Aim a table at a page count, what a sequential scan is costed from: --target-relpages=\"orders=8045\". Postgres only." default:""`
 
-	StatFile string `name:"stat-file" help:"Scan a column statistics export and reuse its null_frac, most_common_vals and most_common_freqs as --null-freq and --values-freq-map. Use the \"export-stat\" subcommand to get the command producing that file." type:"path"`
+	StatFile string `name:"stat-file" help:"Replay a column statistics export: null_frac, most_common_vals and most_common_freqs. See the \"export-stat\" subcommand." type:"path"`
 }
 
 // Run starts inserting data.

@@ -108,6 +108,7 @@ Common options:
 |--debug|Show some debug information|
 |--pprof|Generate pprof trace at --cpu-prof-path. Also opens port 6060 for pprof go tool|
 |--version|Show version and exit|
+|--help-tuning|Print what each tuning flag moves — table size, row width and page count, value frequency, key fan-out — and exit. The flags' own `--help` says what they do in one line; this says why you would reach for them|
 |--rows|Number of rows to insert. One number for every table, or per table, or both: `--rows="1000;orders=500000;order_items=1500000"` fills orders and order_items with their own counts and everything else with 1000|
 |--bulk-size|Number of rows per INSERT statement (Default: 1000)|
 |--workers|how many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time (Default: 3)|
