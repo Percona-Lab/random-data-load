@@ -511,7 +511,7 @@ func TestRun(t *testing.T) {
 			name:       "null_map",
 			checkQuery: "select (count(*) = 100000) AND (sum(CASE WHEN c1 IS NULL THEN 1 ELSE 0 END) between 19500 and 20500) AND (sum(CASE WHEN c2 IS NULL THEN 1 ELSE 0 END) between 39500 and 40500) AND (sum(CASE WHEN c3 IS NULL THEN 1 ELSE 0 END) between 89500 and 90500) from t1;",
 			engines:    []string{"pg", "mysql"},
-			cmds:       [][]string{[]string{"--rows=100000", "--table=t1", "--null-freq=0.2", "--null-freq-map=t1.c2=0.4;t1.c3=0.9"}},
+			cmds:       [][]string{[]string{"--rows=100000", "--table=t1", "--null-freq=0.2;t1.c2=0.4;t1.c3=0.9"}},
 		},
 
 		{
@@ -849,8 +849,8 @@ func TestRun(t *testing.T) {
 			name:    "fk_uniform",
 			engines: []string{"pg", "mysql"},
 			cmds:    [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential"}},
-			verify:  []string{"--rows=100", "--rows-per-table=t1=100;t2=100"},
-			// no --table and no --query, so the tables come from --rows-per-table
+			verify:  []string{"--rows=100;t1=100;t2=100"},
+			// no --table and no --query, so the tables come from --rows
 		},
 
 		// A value pinned by hand that the query also filters on. The two used

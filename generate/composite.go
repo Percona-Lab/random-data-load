@@ -158,7 +158,7 @@ func (in *Insert) newCompositeKeySample(constraints db.Constraints, key []string
 			return nil, err
 		}
 		if size == 0 {
-			return nil, errors.Errorf("table %s.%s holds no row this key can point at, so there is nothing to build %s from. Insert into it first, and check --rows-per-table if this run was meant to fill it",
+			return nil, errors.Errorf("table %s.%s holds no row this key can point at, so there is nothing to build %s from. Insert into it first, and check --rows if this run was meant to fill it",
 				constraint.ReferencedTableSchema, constraint.ReferencedTableName, sample.key)
 		}
 

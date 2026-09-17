@@ -36,58 +36,23 @@ type Frequency struct {
 	nullFromFlag bool
 }
 
-type FrequencyNullParameter TableFrequency
-
-var ErrMalformedFrequencyNullParameter = errors.New("malformed null frequency mapping, the format is \"table.col=(0.0-1.0)[;table.col2=(0.0-1.0)]\". Example \nitems.tags=0.63;items.price=0\"")
+// SetNullFromFlag records the null fraction --null-freq named for one column,
+// marking it as given on the command line so that a statistics dump read
+// later leaves it alone.
+func SetNullFromFlag(table, column string, freq float64) {
+	colMap, ok := SharedTableFrequency[table]
+	if !ok {
+		colMap = map[string]Frequency{}
+	}
+	stored := colMap[column]
+	stored.Null = freq
+	stored.nullFromFlag = true
+	colMap[column] = stored
+	SharedTableFrequency[table] = colMap
+}
 
 func init() {
 	SharedTableFrequency = map[string]ColumnFrequency{}
-}
-
-func (fnp *FrequencyNullParameter) Decode(ctx *kong.DecodeContext, target reflect.Value) error {
-	var value string
-	err := ctx.Scan.PopValueInto("value", &value)
-	if err != nil {
-		return err
-	}
-
-	colMap := map[string]Frequency{}
-
-	args := strings.Split(value, ";")
-	if len(value) == 0 {
-		goto AFFECT_NONETHELESS
-	}
-	for _, arg := range args {
-
-		parts := strings.Split(arg, "=")
-		if len(parts) != 2 {
-			return ErrMalformedFrequencyNullParameter
-		}
-
-		tableColParts := strings.Split(parts[0], ".")
-		if len(tableColParts) != 2 {
-			return ErrMalformedFrequencyNullParameter
-		}
-
-		freq, err := strconv.ParseFloat(parts[1], 64)
-		if err != nil {
-			return errors.Wrap(ErrMalformedFrequencyNullParameter, err.Error())
-		}
-
-		var ok bool
-		if colMap, ok = SharedTableFrequency[tableColParts[0]]; !ok {
-			colMap = map[string]Frequency{}
-		}
-		storedFreq := colMap[tableColParts[1]]
-		storedFreq.Null = freq
-		storedFreq.nullFromFlag = true
-		colMap[tableColParts[1]] = storedFreq
-		SharedTableFrequency[tableColParts[0]] = colMap
-	}
-
-AFFECT_NONETHELESS:
-	target.Set(reflect.ValueOf(SharedTableFrequency))
-	return nil
 }
 
 var DefaultNullFrequency = 0.1

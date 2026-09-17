@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/Percona-Lab/random-data-load/explain"
+	"github.com/Percona-Lab/random-data-load/generate"
 	"github.com/pkg/errors"
 )
 
@@ -21,7 +22,7 @@ type ExplainStatCmd struct {
 
 	File string `arg:"" optional:"" type:"path" help:"File holding the EXPLAIN output. Reads standard input when omitted."`
 
-	RowsPerTable map[string]int64 `name:"rows-per-table" help:"Row counts the reported side gave, in the same format --rows-per-table takes on \"run\". A table this plan only reaches through an index never reveals its size, and a predicate on it has no selectivity without one." default:""`
+	Rows generate.PerTableInt `name:"rows" help:"Row counts the reported side gave, in the same format --rows takes on \"run\": --rows=\"orders=500000;order_items=1500000\". A table this plan only reaches through an index never reveals its size, and a predicate on it has no selectivity without one." default:""`
 
 	FlagsOnly bool `name:"flags-only" help:"Print just the flags for the run, ready to paste."`
 }
@@ -41,11 +42,11 @@ func (cmd *ExplainStatCmd) Run() error {
 		return errors.New("no plan node found. This reads the text EXPLAIN prints, the default format, with or without ANALYZE. Pass the plan as postgres printed it, without the psql table borders")
 	}
 
-	stats := plan.Derive(cmd.RowsPerTable)
+	stats := plan.Derive(cmd.Rows.Named())
 
 	if cmd.FlagsOnly {
-		if flag := stats.RowsPerTableFlag(); flag != "" {
-			fmt.Printf("--rows-per-table=%q\n", flag)
+		if flag := stats.RowsFlag(); flag != "" {
+			fmt.Printf("--rows=%q\n", flag)
 		}
 		if flag := stats.ValuesFreqMapFlag(); flag != "" {
 			fmt.Printf("--values-freq-map=%q\n", flag)
@@ -76,7 +77,7 @@ func (cmd *ExplainStatCmd) supported() error {
 	case "pg":
 		return nil
 	case "mysql":
-		return errors.New("--engine=mysql cannot be read yet: this works from the costs and actual row counts in a postgres text plan, and mysql's EXPLAIN ANALYZE gives neither page counts nor rows-removed counts. Set the frequencies by hand with --null-freq-map and --values-freq-map")
+		return errors.New("--engine=mysql cannot be read yet: this works from the costs and actual row counts in a postgres text plan, and mysql's EXPLAIN ANALYZE gives neither page counts nor rows-removed counts. Set the frequencies by hand with --null-freq and --values-freq-map")
 	}
 	return errors.Errorf("unimplemented engine %q", cmd.Engine)
 }

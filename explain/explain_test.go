@@ -117,8 +117,8 @@ func TestDeriveWithoutGivenSizes(t *testing.T) {
 func TestFlagsAreRunnable(t *testing.T) {
 	stats := load(t, "nested_loop.txt").Derive(map[string]int64{"orders": 120000})
 
-	if got, want := stats.RowsPerTableFlag(), "customers=5000;orders=120000"; got != want {
-		t.Errorf("RowsPerTableFlag() = %q, want %q", got, want)
+	if got, want := stats.RowsFlag(), "customers=5000;orders=120000"; got != want {
+		t.Errorf("RowsFlag() = %q, want %q", got, want)
 	}
 	want := "customers.segment=enterprise:0.0528;orders.status=cancelled:0.0406"
 	if got := stats.ValuesFreqMapFlag(); got != want {

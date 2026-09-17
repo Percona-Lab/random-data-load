@@ -49,44 +49,56 @@ func (r *PerTableFloat) Decode(ctx *kong.DecodeContext, target reflect.Value) er
 }
 
 // ParsePerTableFloat reads the flag's value. Both separators are accepted:
-// ";" is what --rows-per-table uses, and a number holds no "," to confuse a
-// reader with.
+// ";" is what these flags use, and a number holds no "," to confuse a reader
+// with.
 func ParsePerTableFloat(value string) (PerTableFloat, error) {
 	parsed := PerTableFloat{}
-	if strings.TrimSpace(value) == "" {
-		return parsed, nil
-	}
-
-	for _, part := range strings.FieldsFunc(value, func(r rune) bool { return r == ';' || r == ',' }) {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-
-		table, number, perTable := strings.Cut(part, "=")
-		if !perTable {
-			if _, already := parsed[everyTable]; already {
-				return parsed, errors.Wrapf(ErrMalformedPerTableFloat, "two values given for every relationship, %g and %s", parsed[everyTable], part)
+	err := splitPerTable(value, ErrMalformedPerTableFloat, func(key, number string) error {
+		if key == everyTable {
+			if already, ok := parsed[everyTable]; ok {
+				return errors.Wrapf(ErrMalformedPerTableFloat, "two values given for every relationship, %g and %s", already, number)
 			}
-			f, err := strconv.ParseFloat(part, 64)
-			if err != nil {
-				return parsed, errors.Wrap(ErrMalformedPerTableFloat, err.Error())
-			}
-			parsed[everyTable] = f
-			continue
 		}
-
-		table = strings.TrimSpace(table)
-		if table == "" {
-			return parsed, errors.Wrapf(ErrMalformedPerTableFloat, "no table named in %q", part)
-		}
-		f, err := strconv.ParseFloat(strings.TrimSpace(number), 64)
+		f, err := strconv.ParseFloat(number, 64)
 		if err != nil {
-			return parsed, errors.Wrap(ErrMalformedPerTableFloat, err.Error())
+			return errors.Wrap(ErrMalformedPerTableFloat, err.Error())
 		}
-		parsed[strings.ToLower(table)] = f
+		parsed[key] = f
+		return nil
+	})
+	return parsed, err
+}
+
+// ForColumn returns the value given for one column, for the flags whose
+// subject is a column rather than a table -- a null fraction belongs to a
+// column, since a table is not the thing that can be NULL. Such a flag is
+// written "table.column=0.63", and the bare number still stands for
+// everything the run touches.
+func (r PerTableFloat) ForColumn(table, column string) float64 {
+	if v, ok := r[strings.ToLower(table+"."+column)]; ok {
+		return v
 	}
-	return parsed, nil
+	return r[everyTable]
+}
+
+// IsSetForColumn reports whether this exact column was named.
+func (r PerTableFloat) IsSetForColumn(table, column string) bool {
+	_, ok := r[strings.ToLower(table+"."+column)]
+	return ok
+}
+
+// Columns returns the "table.column" keys that named a column, so a caller
+// can check their shape and fan them out. Anything that is not a bare number
+// and holds no "." is returned too, for the caller to reject by name.
+func (r PerTableFloat) Columns() []string {
+	keys := make([]string, 0, len(r))
+	for k := range r {
+		if k != everyTable {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // For returns the value given for this table, which is 0 when none was given
