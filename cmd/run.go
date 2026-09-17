@@ -21,33 +21,31 @@ import (
 type RunCmd struct {
 	DB db.Config `embed:""`
 
-	Table            string           `help:"Table to insert to. When using --query, --table will be used to restrict the tables to insert to."`
-	Rows             int64            `name:"rows" required:"true" help:"Number of rows to insert"`
-	RowsPerTable     map[string]int64 `name:"rows-per-table" help:"Number of rows to insert per-table. Will have priority over --rows. Format is \"{table}=X\"" default:""`
-	BulkSize         int64            `name:"bulk-size" help:"Number of rows per insert statement" default:"1000"`
-	DryRun           bool             `name:"dry-run" help:"Print queries to the standard output instead of inserting them into the db"`
-	Truncate         bool             `name:"truncate" help:"Empty the tables this run fills before inserting into them. Without it a second run adds to what the first one left, which is rarely what tuning a run wants. Never touches a table this run does not fill: a foreign key pointing in from outside makes it refuse rather than cascade."`
-	Quiet            bool             `name:"quiet" help:"Do not print progress bar"`
-	WorkersCount     int              `name:"workers" help:"How many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time" default:"3"`
-	MaxTextSize      int64            `help:"Limit the maximum size of long text, varchar and blob fields." default:"65535"`
-	UUIDVersion      int              `name:"uuid-version" help:"UUID v4 or v7 for uuid datatypes" default:"4" enum:"4,7"`
-	MinGeneratedTime time.Time        `help:"Generated timestamps will be after this date. Format is RFC3339. Will default to --max-generated-time - 1 year"`
-	MaxGeneratedTime time.Time        `help:"Generated timestamps will be before this date. Format is RFC3339. Will default to now()"`
-	Query            string           `help:"Providing a query will enable to automatically discover the schema, insert recursively into tables, enforce implicit joins."`
+	Table            string               `help:"Table to insert to. When using --query, --table will be used to restrict the tables to insert to."`
+	Rows             generate.PerTableInt `name:"rows" required:"true" placeholder:"N|table=N" help:"Number of rows to insert. One number for every table, or per table, or both: --rows=\"1000;orders=500000;order_items=1500000\""`
+	BulkSize         int64                `name:"bulk-size" help:"Number of rows per insert statement" default:"1000"`
+	DryRun           bool                 `name:"dry-run" help:"Print queries to the standard output instead of inserting them into the db"`
+	Truncate         bool                 `name:"truncate" help:"Empty the tables this run fills before inserting into them. Without it a second run adds to what the first one left, which is rarely what tuning a run wants. Never touches a table this run does not fill: a foreign key pointing in from outside makes it refuse rather than cascade."`
+	Quiet            bool                 `name:"quiet" help:"Do not print progress bar"`
+	WorkersCount     int                  `name:"workers" help:"How many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time" default:"3"`
+	MaxTextSize      int64                `help:"Limit the maximum size of long text, varchar and blob fields." default:"65535"`
+	UUIDVersion      int                  `name:"uuid-version" help:"UUID v4 or v7 for uuid datatypes" default:"4" enum:"4,7"`
+	MinGeneratedTime time.Time            `help:"Generated timestamps will be after this date. Format is RFC3339. Will default to --max-generated-time - 1 year"`
+	MaxGeneratedTime time.Time            `help:"Generated timestamps will be before this date. Format is RFC3339. Will default to now()"`
+	Query            string               `help:"Providing a query will enable to automatically discover the schema, insert recursively into tables, enforce implicit joins."`
 
 	generate.ForeignKeyLinks
 	AddForeignKeys    query.VirtualJoins                      `name:"add-fk" help:"Add foreign keys, if they are not explicitely created in the table schema. It can complement the foreign keys guessed from the --query, or be used to manually define foreign keys when using --no-fk-guess too. Format: --add-fk=\"parent_table.col1[,col2...]=child_table.colx[,coly...][; additional fk ]\". Example: --add-fk=\"customers.id,created_at=purchases.customer_id,created_at;purchases.id=items.purchase_id\""`
-	FillFKParents     bool                                    `name:"fill-fk-parents" help:"Add the tables a foreign key points at to this run when they hold no row, filling them with --rows or --rows-per-table. Without it, such a run is refused up front naming them, rather than failing part way through with some tables already loaded."`
+	FillFKParents     bool                                    `name:"fill-fk-parents" help:"Add the tables a foreign key points at to this run when they hold no row, filling them with --rows. Without it, such a run is refused up front naming them, rather than failing part way through with some tables already loaded."`
 	NoFKGuess         bool                                    `name:"no-fk-guess" help:"Do not try to guess foreign keys from the --query missing in the schema. When a query is provided, it will analyze the expected JOINs and try to respect dependencies even when foreign keys are not explicitely created in the database objects. This flag will make the tool stick to the constraints defined in the database only, unless you add foreign keys manually with --add-fk." `
 	NoSkipFields      bool                                    `name:"no-skip-fields" help:"Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found."`
-	NullFreq          float64                                 `name:"null-freq" help:"Define how frequent nullable fields should be NULL by default." default:"0.1"`
-	NullFreqMap       frequency.FrequencyNullParameter        `name:"null-freq-map" help:"Define how frequent nullable fields should be NULL for a given column, as a fraction between 0 and 1 like --null-freq. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=0.73;t1.c2=0.04\" to set 73% or 4% of NULL for respective columns" default:""`
+	NullFreq          generate.PerTableFloat                  `name:"null-freq" help:"How often a nullable column is NULL, as a fraction between 0 and 1. One number for every column, or per column, or both: --null-freq=\"0.1;items.tags=0.73;items.price=0\"" default:"0.1"`
 	ValuesFreqMap     frequency.FrequencyIndexValuesParameter `name:"values-freq-map" help:"Inject arbitrary values at fixed frequencies. The format is \"--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99\" so that val1 will be on 75% of rows and val2 on 23% for column c1" default:""` // TODO we're not checking if the total freq is above 1
 	QueryParamsFreq   float64                                 `name:"query-param-freq" help:"Insert the literals the --query compares a column to, on this fraction of the rows, so that the query returns something. = and IN operators are handled. It is a selectivity nobody measured, so it is off by default and overrides anything --stat-file says about those values when you do set it. The run names the predicates nothing will match." default:"0"`
 	TargetBytesPerRow generate.PerTableFloat                  `name:"target-bytes-per-row" help:"Aim the rows of a table at an average width, in bytes, by writing longer or shorter values into its free-text columns. It is the figure a plan's \"width=\" is built from, and the one that decides how many rows fit in a page. Can be given per table: --target-bytes-per-row=\"97;order_items=24\"" default:""`
 	TargetRelpages    generate.PerTableFloat                  `name:"target-relpages" help:"Aim a table at a page count instead, which --rows and postgres' page layout turn into a row width. Page count is what a sequential scan's cost is built from, so it is usually the figure a reproduction has to hit. Can be given per table: --target-relpages=\"orders=12345\". Postgres only. " default:""`
 
-	StatFile string `name:"stat-file" help:"Scan a column statistics export and reuse its null_frac, most_common_vals and most_common_freqs as --null-freq-map and --values-freq-map. Use the \"export-stat\" subcommand to get the command producing that file." type:"path"`
+	StatFile string `name:"stat-file" help:"Scan a column statistics export and reuse its null_frac, most_common_vals and most_common_freqs as --null-freq and --values-freq-map. Use the \"export-stat\" subcommand to get the command producing that file." type:"path"`
 }
 
 // Run starts inserting data.
@@ -113,7 +111,9 @@ func (cmd *RunCmd) Run() error {
 		tablesNames = map[string]struct{}{cmd.Table: struct{}{}}
 	}
 
-	frequency.DefaultNullFrequency = cmd.NullFreq
+	if err := cmd.applyNullFreq(); err != nil {
+		return err
+	}
 	log.Debug().Interface("freq-map", frequency.SharedTableFrequency).Msg("frequency maps parsed")
 	frequency.MergeQueryParameters(queryParams, cmd.QueryParamsFreq)
 	log.Debug().Interface("freq-map", frequency.SharedTableFrequency).Msg("merged query params into frequency map")
@@ -168,12 +168,9 @@ func (cmd *RunCmd) Run() error {
 			return err
 		}
 		if copiedTable != nil {
-			rows, ok := cmd.RowsPerTable[table.Name]
-			if !ok {
-				rows = cmd.Rows
-			}
+			rows := cmd.Rows.For(table.Name)
 			log.Info().Str("table", table.Name).Int64("rows", rows/2).Msg("table has a self-referencing foreign key. Setting --rows to half for this table since we will insert twice to it to resolve the dependency.")
-			cmd.RowsPerTable[table.Name] = rows / 2
+			cmd.Rows.Set(table.Name, rows/2)
 			tables = append([]*db.Table{copiedTable}, tables...)
 
 		} else if table.HasAnyConstraintLoop() {
@@ -354,7 +351,7 @@ func (cmd *RunCmd) resolveForeignKeyParents(tables []*db.Table) ([]*db.Table, er
 				continue
 			}
 
-			rows := valueForTable(cmd.Rows, cmd.RowsPerTable, parent.Name)
+			rows := cmd.Rows.For(parent.Name)
 			log.Info().Str("table", parent.FullName()).Int64("rows", rows).Str("neededBy", queue[i].FullName()).
 				Msgf("adding %s to this run, as --fill-fk-parents asks: %s points at it and it holds no row. It will be filled with %d rows",
 					parent.FullName(), queue[i].FullName(), rows)
@@ -509,7 +506,7 @@ func (cmd *RunCmd) mergeStats(tables []*db.Table) error {
 }
 
 func (cmd *RunCmd) run(table *db.Table) error {
-	rows := valueForTable(cmd.Rows, cmd.RowsPerTable, table.Name)
+	rows := cmd.Rows.For(table.Name)
 	colNullFreqs := frequency.SharedTableFrequency[table.Name]
 	ins := generate.New(table, cmd.ForeignKeyLinks, cmd.WorkersCount, cmd.MaxTextSize, cmd.UUIDVersion, colNullFreqs, &cmd.MinGeneratedTime, &cmd.MaxGeneratedTime)
 	ins.SetTargetBytesPerRow(cmd.rowWidthTarget(table, rows))
@@ -546,11 +543,32 @@ func startProgressBar(tablename string, total int64, c chan int64) {
 	writer.Reset()
 }
 
-func valueForTable[E any](val E, valPerTable map[string]E, table string) E {
-	if v, ok := valPerTable[table]; ok {
-		return v
+// applyNullFreq spreads --null-freq out: the bare number becomes the fraction
+// every nullable column falls back to, and each "table.column=" entry is
+// recorded against that column, marked as coming from the command line so a
+// --stat-file read afterwards does not overwrite what was asked for.
+//
+// A null fraction belongs to a column rather than to a table -- a table is not
+// the thing that can be NULL -- so an entry naming only a table is refused
+// here rather than silently matching nothing.
+func (cmd *RunCmd) applyNullFreq() error {
+	frequency.DefaultNullFrequency = cmd.NullFreq.For("")
+
+	for _, key := range cmd.NullFreq.Columns() {
+		table, column, ok := strings.Cut(key, ".")
+		if !ok || table == "" || column == "" {
+			return errors.Errorf("--null-freq=%q names no column: a null fraction is set per column, written \"table.column=0.63\", or as a bare number for every column", key)
+		}
+		freq := cmd.NullFreq[key]
+		if freq < 0 || freq > 1 {
+			return errors.Errorf("--null-freq for %s.%s is %g, which is not a fraction between 0 and 1", table, column, freq)
+		}
+		frequency.SetNullFromFlag(table, column, freq)
 	}
-	return val
+	if freq := frequency.DefaultNullFrequency; freq < 0 || freq > 1 {
+		return errors.Errorf("--null-freq is %g, which is not a fraction between 0 and 1", freq)
+	}
+	return nil
 }
 
 func helperForMySQLFKChecks(tablesSorted []*db.Table, err error) {

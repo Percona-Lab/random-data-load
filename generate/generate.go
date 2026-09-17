@@ -441,7 +441,7 @@ func parentRowCount(schema, table string) (int64, error) {
 		return 0, err
 	}
 	if count == 0 {
-		return 0, errors.Errorf("table %s.%s is empty, so there is nothing to point a foreign key at. Insert into it first, and check --rows-per-table if this run was meant to fill it", schema, table)
+		return 0, errors.Errorf("table %s.%s is empty, so there is nothing to point a foreign key at. Insert into it first, and check --rows if this run was meant to fill it", schema, table)
 	}
 	log.Debug().Str("table", table).Str("schema", schema).Int64("rows", count).Msg("counted the rows of a parent table")
 	parentRowCounts[schema+"."+table] = count

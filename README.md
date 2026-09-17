@@ -108,17 +108,16 @@ Common options:
 |--debug|Show some debug information|
 |--pprof|Generate pprof trace at --cpu-prof-path. Also opens port 6060 for pprof go tool|
 |--version|Show version and exit|
-|--rows-per-table|Number of rows to insert per-table. Will have priority over --rows|
+|--rows|Number of rows to insert. One number for every table, or per table, or both: `--rows="1000;orders=500000;order_items=1500000"` fills orders and order_items with their own counts and everything else with 1000|
 |--bulk-size|Number of rows per INSERT statement (Default: 1000)|
 |--workers|how many workers to spawn. Only the random generation and sampling are parallelized. Insert queries are executed one at a time (Default: 3)|
 |--table|Table to insert to. When using --query, --table will be used to restrict the tables to insert to.|
 |--query|Providing a query will analyze its schema usage, insert recursively into tables, and identify implicit joins|
 |--no-skip-fields|Disable field whitelist system. When using a --query, it will get the list of fields being used as a whitelist in order to generate the minimal sets of fields required, unless --no-skip-fields is being used or any * has been found.|
-|--null-freq|Define how frequent nullable fields should be NULL, as a fraction between 0 and 1 (Default: 0.1)|
-|--null-freq-map|Define how frequent nullable fields should be NULL for a given column, as a fraction between 0 and 1 like --null-freq. Will have priority over --null-freq. The format is \"--null-freq-map=t1.c1=0.73;t1.c2=0.04\" to set 73% or 4% of NULL for respective columns|
+|--null-freq|How often a nullable column is NULL, as a fraction between 0 and 1. One number for every column, or per column, or both: `--null-freq="0.1;t1.c1=0.73;t1.c2=0.04"` leaves every other column at 10% and sets 73% and 4% on those two (Default: 0.1)|
 |--values-freq-map|Inject arbitrary values at fixed frequencies. The format is "--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99" so that val1 will be on 75% of rows and val2 on 23% for column c1|
 |--query-param-freq|Insert the literals the `--query` compares a column to, on this fraction of the rows, so the query returns something. Defaults to 0: it is a selectivity nobody measured, so it is only applied when asked for, and it then overrides anything `--stat-file` says about those values. The run names the predicates nothing will match|
-|--stat-file|Scan a column statistics export and reuse its null_frac, most_common_vals and most_common_freqs instead of setting --null-freq-map and --values-freq-map by hand. Use the `export-stat` subcommand to get the command producing that file|
+|--stat-file|Scan a column statistics export and reuse its null_frac, most_common_vals and most_common_freqs instead of setting --null-freq and --values-freq-map by hand. Use the `export-stat` subcommand to get the command producing that file|
 |--min-generated-time|Generated timestamps will be after this date. Format is RFC3339. Will default to --max-generated-time - 1 year|
 |--max-generated-time|Generated timestamps will be before this date. Format is RFC3339. Will default to now()|
 
@@ -278,7 +277,7 @@ the tables it reads, and those tables have NOT NULL foreign keys to tables it do
 name; the run used to discover that part way through, with the tables ahead of it in the
 insert order already loaded. The whole closure is walked up front and refused in one
 message naming every table that has to be filled first, or, with `--fill-fk-parents`,
-those tables are added to the run and filled with `--rows`/`--rows-per-table`. A parent
+those tables are added to the run and filled with `--rows`. A parent
 that already holds rows is left alone either way.
 
 A unique key whose columns come from **several** foreign keys is filled from all of them
@@ -371,7 +370,7 @@ Conditions on either side of an OR are kept as separate single-column keys, neve
 
 ## Reusing the data distribution of a real database
 
-Setting `--null-freq-map` and `--values-freq-map` by hand means knowing the shape of
+Setting `--null-freq` and `--values-freq-map` by hand means knowing the shape of
 the production data in the first place. Postgres already measured it: `pg_stats` holds
 a `null_frac`, a `most_common_vals` and a `most_common_freqs` for every analyzed
 column, and those three are exactly what the two options take.
@@ -427,7 +426,7 @@ A few things worth knowing:
   contributes on its own, so the result lands on what was measured rather than above it.
   Only single-column keys: the common values of one column of a composite key say how
   often that column repeats, not how often the pair does
-- `--null-freq-map`, `--values-freq-map` and `--query-param-freq` win. Each of them is
+- `--null-freq`, `--values-freq-map` and `--query-param-freq` win. Each of them is
   an instruction and the export is a measurement, so setting one is how you override
   what the export says about a value. In particular `--query-param-freq` is how you
   force a query to return rows whatever the export measured
@@ -449,7 +448,7 @@ A few things worth knowing:
 `--engine=mysql` is refused for now rather than exporting something unusable:
 `information_schema.COLUMN_STATISTICS` only holds histograms, and only for the
 columns someone explicitly ran `ANALYZE TABLE ... UPDATE HISTOGRAM ON` against. On
-MySQL, set the frequencies by hand with `--null-freq-map` and `--values-freq-map`.
+MySQL, set the frequencies by hand with `--null-freq` and `--values-freq-map`.
 
 ## Aiming a table at a row width or a page count
 
@@ -516,7 +515,7 @@ the two side by side:
 
 ```
 random-data-load verify --engine=pg --database=shop --query="..." plan.txt \
-    --rows-per-table="customers=200000;orders=3600000" --stat-file=pg_stats.json
+    --rows="customers=200000;orders=3600000" --stat-file=pg_stats.json
 ```
 
 ```
@@ -543,7 +542,7 @@ given rather than a second set written by hand:
   row counts, page counts, selectivities and distinct counts become targets
 - `--stat-file`, whose `null_frac` and `most_common_freqs` become targets too.
   `--max-common-vals` caps how many values of each column are checked
-- `--rows-per-table` and `--rows`, for the sizes a plan cannot reveal on its own
+- `--rows`, for the sizes a plan cannot reveal on its own
 
 A figure the reported side never gave is still printed, marked `no target`: what a run
 actually produced is worth reading on its own. `--tolerance` sets how far a figure may

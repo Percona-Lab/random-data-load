@@ -10,6 +10,7 @@ import (
 	"github.com/Percona-Lab/random-data-load/db"
 	"github.com/Percona-Lab/random-data-load/explain"
 	"github.com/Percona-Lab/random-data-load/frequency"
+	"github.com/Percona-Lab/random-data-load/generate"
 	"github.com/Percona-Lab/random-data-load/query"
 	"github.com/pkg/errors"
 )
@@ -26,18 +27,17 @@ import (
 // the tool to print it rather than the caller to assemble it.
 //
 // It takes the same inputs the run took -- the target EXPLAIN, --stat-file,
-// --rows-per-table -- so the expectations are the ones the run was given, not
+// --rows -- so the expectations are the ones the run was given, not
 // a second set written by hand.
 type VerifyCmd struct {
 	DB db.Config `embed:""`
 
 	File string `arg:"" optional:"" type:"path" help:"File holding the EXPLAIN of the reported side, the same one \"explain-stat\" reads. Its row counts, page counts, selectivities and distinct counts are what the generated tables are held against."`
 
-	Query        string           `help:"The query being reproduced. Its tables are the ones read back."`
-	Table        string           `help:"Table to read back. With --query, it restricts the check to that single table."`
-	Rows         int64            `name:"rows" help:"Row count every table was filled with, as it was given to \"run\"."`
-	RowsPerTable map[string]int64 `name:"rows-per-table" help:"Row counts per table, in the format \"run\" takes. Also fills in the sizes a plan cannot reveal on its own." default:""`
-	StatFile     string           `name:"stat-file" help:"The statistics export the run was given. Its null_frac and most_common_freqs are compared against what the generated columns hold." type:"path"`
+	Query    string               `help:"The query being reproduced. Its tables are the ones read back."`
+	Table    string               `help:"Table to read back. With --query, it restricts the check to that single table."`
+	Rows     generate.PerTableInt `name:"rows" help:"Row counts the tables were filled with, exactly as they were given to \"run\": --rows=\"1000;orders=500000\". Also fills in the sizes a plan cannot reveal on its own." default:""`
+	StatFile string               `name:"stat-file" help:"The statistics export the run was given. Its null_frac and most_common_freqs are compared against what the generated columns hold." type:"path"`
 
 	MaxCommonVals int     `name:"max-common-vals" help:"Check only the first N most common values of each column from --stat-file. 0 checks them all." default:"5"`
 	Tolerance     float64 `name:"tolerance" help:"How far a generated figure may sit from the reported one before it is called out, as a fraction. 0.05 is 5%." default:"0.05"`
@@ -80,7 +80,7 @@ func (cmd *VerifyCmd) Run() error {
 }
 
 // reportedPlan reads the target EXPLAIN, which is optional: a run tuned only
-// with --rows-per-table and a statistics export has no plan to hold against.
+// with --rows and a statistics export has no plan to hold against.
 func (cmd *VerifyCmd) reportedPlan() (*explain.Stats, error) {
 	if cmd.File == "" {
 		return &explain.Stats{}, nil
@@ -93,7 +93,7 @@ func (cmd *VerifyCmd) reportedPlan() (*explain.Stats, error) {
 	if len(parsed.Nodes) == 0 {
 		return nil, errors.Errorf("no plan node found in %s. This reads the text EXPLAIN prints, the default format, with or without ANALYZE", cmd.File)
 	}
-	return parsed.Derive(cmd.RowsPerTable), nil
+	return parsed.Derive(cmd.Rows.Named()), nil
 }
 
 func (cmd *VerifyCmd) reportedColumns() ([]frequency.ColumnStats, error) {
@@ -187,10 +187,8 @@ func (cmd *VerifyCmd) targets(plan *explain.Stats, stats []frequency.ColumnStats
 	// given nothing but --rows can still be held against
 	for _, target := range targets {
 		if target.rows == 0 {
-			if rows, ok := cmd.RowsPerTable[target.table.Name]; ok {
-				target.rows, target.rowsSource = rows, "--rows-per-table"
-			} else if cmd.Rows > 0 {
-				target.rows, target.rowsSource = cmd.Rows, "--rows"
+			if rows := cmd.Rows.For(target.table.Name); rows > 0 {
+				target.rows, target.rowsSource = rows, "--rows"
 			}
 		}
 		target.measure.Schema, target.measure.Table = target.table.Schema, target.table.Name
@@ -257,7 +255,7 @@ func (cmd *VerifyCmd) tableNames(plan *explain.Stats, stats []frequency.ColumnSt
 		names[stat.Tablename] = struct{}{}
 	}
 	// naming a table's expected row count is naming a table to look at
-	for name := range cmd.RowsPerTable {
+	for _, name := range cmd.Rows.Tables() {
 		names[name] = struct{}{}
 	}
 	// --table narrows rather than adds, the same way it does on "run"

@@ -97,7 +97,7 @@ reachable instead of accidental.
   all three inferred relationships as already covered by declared foreign keys.
   Every run confirmed it needed no `--add-fk`. Bug 1 above is in literal
   extraction, not in this.
-- **Exact row counts.** `--rows-per-table` hits the reported figure exactly on
+- **Exact row counts.** `--rows` hits the reported figure exactly on
   every table, where the hand-written arm's `random()` sampling drifts by a few
   thousand rows.
 - **Walking the FK graph.** Insert ordering, the composite foreign key and the

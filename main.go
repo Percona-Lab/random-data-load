@@ -52,8 +52,13 @@ func main() {
 		kong.Description("Load random data into a table"),
 		kong.UsageOnError(),
 		kong.ValueMapper(&cli.Run.AddForeignKeys, query.VirtualJoins{}),
-		kong.ValueMapper(&cli.Run.NullFreqMap, &frequency.FrequencyNullParameter{}),
 		kong.ValueMapper(&cli.Run.ValuesFreqMap, &frequency.FrequencyIndexValuesParameter{}),
+		// row counts are given once for the run, per table, or both
+		kong.ValueMapper(&cli.Run.Rows, &generate.PerTableInt{}),
+		kong.ValueMapper(&cli.Verify.Rows, &generate.PerTableInt{}),
+		kong.ValueMapper(&cli.ExplainStat.Rows, &generate.PerTableInt{}),
+		// a null fraction the same way, but its subject is a column
+		kong.ValueMapper(&cli.Run.NullFreq, &generate.PerTableFloat{}),
 		// every sampler's tuning takes a value per parent table as well as one
 		// for the whole run, so each needs its own reader
 		kong.ValueMapper(&cli.Run.CoinFlipPercent, &generate.PerTableFloat{}),

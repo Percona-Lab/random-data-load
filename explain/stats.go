@@ -144,7 +144,7 @@ func (p *Plan) tableRows(known map[string]int64, stats *Stats) map[string]*Table
 	}
 	if len(known) == 0 {
 		stats.Warnings = append(stats.Warnings,
-			"no row counts were given, so any table read only through an index has no size and its predicates have no selectivity. Pass what the reported side said with --rows-per-table")
+			"no row counts were given, so any table read only through an index has no size and its predicates have no selectivity. Pass what the reported side said with --rows")
 	}
 	return rows
 }

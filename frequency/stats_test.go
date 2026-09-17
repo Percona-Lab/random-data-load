@@ -118,7 +118,7 @@ func TestMergeStats(t *testing.T) {
 			wantNull: 0,
 		},
 		{
-			name:     "--null-freq-map wins over the dump",
+			name:     "--null-freq wins over the dump",
 			existing: ColumnFrequency{"c1": {Null: 0.3, nullFromFlag: true}},
 			stats:    []ColumnStats{{Tablename: "t1", Attname: "c1", NullFrac: 0.9}},
 			wantNull: 0.3,

@@ -73,7 +73,7 @@ func (cmd *ExportStatCmd) supported() error {
 	case "pg":
 		return nil
 	case "mysql":
-		return errors.New("--engine=mysql cannot be exported yet: mysql only keeps histograms, in information_schema.COLUMN_STATISTICS, and only for the columns an explicit \"ANALYZE TABLE ... UPDATE HISTOGRAM ON\" built one for. Set the frequencies by hand with --null-freq-map and --values-freq-map")
+		return errors.New("--engine=mysql cannot be exported yet: mysql only keeps histograms, in information_schema.COLUMN_STATISTICS, and only for the columns an explicit \"ANALYZE TABLE ... UPDATE HISTOGRAM ON\" built one for. Set the frequencies by hand with --null-freq and --values-freq-map")
 	}
 	return errors.Errorf("unimplemented engine %q", cmd.Engine)
 }

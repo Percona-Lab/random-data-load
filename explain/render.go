@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// RowsPerTableFlag renders the table sizes as the --rows-per-table the run
-// takes. Tables the plan says nothing about are left out rather than guessed.
-func (s *Stats) RowsPerTableFlag() string {
+// RowsFlag renders the table sizes as the --rows the run takes. Tables the
+// plan says nothing about are left out rather than guessed.
+func (s *Stats) RowsFlag() string {
 	parts := []string{}
 	for _, t := range s.Tables {
 		if t.Rows > 0 {
@@ -98,8 +98,8 @@ func (s *Stats) Report() string {
 	}
 
 	fmt.Fprintln(b, "\nFlags for the run")
-	if flag := s.RowsPerTableFlag(); flag != "" {
-		fmt.Fprintf(b, "  --rows-per-table=%q\n", flag)
+	if flag := s.RowsFlag(); flag != "" {
+		fmt.Fprintf(b, "  --rows=%q\n", flag)
 	}
 	if flag := s.ValuesFreqMapFlag(); flag != "" {
 		fmt.Fprintf(b, "  --values-freq-map=%q\n", flag)

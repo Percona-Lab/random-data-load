@@ -77,7 +77,7 @@ func ParseStats(r io.Reader) ([]ColumnStats, error) {
 // MergeStats turns a pg_stats dump into null and value frequencies.
 //
 // Values already present for a column are left alone and are not duplicated:
-// --null-freq-map, --values-freq-map and the literals taken from --query are
+// --null-freq, --values-freq-map and the literals taken from --query are
 // deliberate, so they win over what the dump observed.
 func MergeStats(stats []ColumnStats, resolve Resolver) {
 	for _, cs := range stats {
@@ -188,7 +188,7 @@ func (freq *Frequency) claims(value string) bool {
 // generated table end up with the null_frac that was measured.
 func (freq *Frequency) mergeNullFraction(cs ColumnStats, table, column string) {
 	if freq.nullFromFlag {
-		log.Debug().Str("table", table).Str("column", column).Msg("--null-freq-map set this column explicitly, ignoring null_frac from the dump")
+		log.Debug().Str("table", table).Str("column", column).Msg("--null-freq set this column explicitly, ignoring null_frac from the dump")
 		return
 	}
 
