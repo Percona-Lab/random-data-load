@@ -37,7 +37,7 @@ type VerifyCmd struct {
 	Query    string               `help:"The query being reproduced. Its tables are the ones read back."`
 	Table    string               `help:"Table to read back. With --query, it restricts the check to that single table."`
 	Rows     generate.PerTableInt `name:"rows" help:"Row counts the tables were filled with, exactly as they were given to \"run\": --rows=\"1000;orders=500000\". Also fills in the sizes a plan cannot reveal on its own." default:""`
-	StatFile string               `name:"stat-file" help:"The statistics export the run was given. Its null_frac and most_common_freqs are compared against what the generated columns hold." type:"path"`
+	StatFile string               `name:"stat-file" help:"The statistics export the run was given. Its null_frac, most_common_freqs and avg_width are compared against what the generated table holds." type:"path"`
 
 	MaxCommonVals int     `name:"max-common-vals" help:"Check only the first N most common values of each column from --stat-file. 0 checks them all." default:"5"`
 	Tolerance     float64 `name:"tolerance" help:"How far a generated figure may sit from the reported one before it is called out, as a fraction. 0.05 is 5%." default:"0.05"`
@@ -112,6 +112,10 @@ type verifyTarget struct {
 	rows, pages, width int64
 	rowsSource         string
 
+	// widthSource says which side gave the row width, because that decides
+	// whether missing it is a failure: see the comparison in check.
+	widthSource string
+
 	selectivities []explain.Selectivity
 	distincts     []explain.Distinct
 	columns       []frequency.ColumnStats
@@ -183,6 +187,19 @@ func (cmd *VerifyCmd) targets(plan *explain.Stats, stats []frequency.ColumnStats
 		}
 	}
 
+	// the row width the export describes, which is the sharper of the two: a
+	// plan's "width=" counts the columns its scan outputs, and the export
+	// counts the row
+	for _, target := range targets {
+		width, why := target.widthFromStats()
+		switch {
+		case width > 0:
+			target.width, target.widthSource = width, widthSourceExport
+		case why != "" && target.width == 0:
+			target.skipped = append(target.skipped, why)
+		}
+	}
+
 	// the row count every other figure is a share of, and the only one a run
 	// given nothing but --rows can still be held against
 	for _, target := range targets {
@@ -222,6 +239,58 @@ func (t *verifyTarget) want(column string) bool {
 		t.skipped = append(t.skipped, note)
 	}
 	return false
+}
+
+// widthSourceExport marks a row width that came from the statistics export
+// rather than from the plan.
+const widthSourceExport = "--stat-file"
+
+// widthFromStats is the row width the export describes: every column's
+// avg_width added up.
+//
+// That sum is the figure the catalog hands back for the generated table --
+// postgres' own "width of a row" is the same addition over the same columns --
+// so unlike the plan's "width=" the two sides here are measuring one thing,
+// and the run was aimed at it. It is the null fraction that is not in it:
+// avg_width is measured over the rows holding a value, so comparing it to
+// another avg_width needs no correction, while aiming a generator at a row
+// width does. Both come out right when the run reproduces the column widths it
+// was given.
+//
+// The whole table or nothing, for the reason "run" leaves a partial dump
+// alone: the columns of an export narrowed by a --query add up to less than a
+// row, and reporting that as the width to hit would call every correct table
+// too wide. The second return value is why there is no width, for a report
+// that would otherwise only say "no target".
+func (t *verifyTarget) widthFromStats() (int64, string) {
+	if t.unreadable != "" || len(t.columns) == 0 {
+		return 0, ""
+	}
+
+	covered := map[string]struct{}{}
+	var width, measured int64
+	for _, cs := range t.columns {
+		covered[strings.ToLower(cs.Attname)] = struct{}{}
+		width += cs.AvgWidth
+		if cs.AvgWidth > 0 {
+			measured++
+		}
+	}
+	if measured == 0 {
+		return 0, ""
+	}
+
+	missing := []string{}
+	for _, field := range t.table.Fields {
+		if _, ok := covered[strings.ToLower(field.ColumnName)]; !ok {
+			missing = append(missing, field.ColumnName)
+		}
+	}
+	if len(missing) > 0 {
+		return 0, fmt.Sprintf("%s: the export does not cover %s, so its avg_width adds up to less than a row and is not held against the generated width",
+			t.table.Name, strings.Join(missing, ", "))
+	}
+	return width, ""
 }
 
 // predicate adds a "column = value" to read back, once however many figures
@@ -318,13 +387,29 @@ func (cmd *VerifyCmd) check(target *verifyTarget, report *verifyReport) {
 		// not the width of a stored row, so the two only line up when the
 		// scan projects the whole table. It is worth printing -- it is what a
 		// row-width target is aimed at -- and not worth failing a run over.
-		report.add(comparison{
+		//
+		// The export's is the same addition the catalog does, column for
+		// column, so that one is held to like any other figure. Except on
+		// InnoDB, which reports a sampled average row length with the record
+		// header in it rather than a sum of column widths, and would fail on
+		// the difference between the two figures rather than on the data.
+		width := comparison{
 			subject: name, figure: figureWidth,
 			reported: float64(target.width), hasTarget: target.width > 0,
 			generated: float64(storage.Width),
 			measured:  true, advisory: true,
-			source: "the plan counts only the columns its scan outputs, the catalog counts every column",
-		})
+		}
+		switch {
+		case target.widthSource == widthSourceExport:
+			width.advisory = cmd.DB.Engine != "pg"
+			width.source = "--stat-file: the export's avg_width added up over the table's columns, which is the sum the catalog reports back"
+			if width.advisory {
+				width.source = "--stat-file: the export's avg_width added up over the table's columns. InnoDB reports a sampled average row length, record header included, so the two are close rather than the same figure"
+			}
+		case target.width > 0:
+			width.source = "the plan counts only the columns its scan outputs, the catalog counts every column"
+		}
+		report.add(width)
 		// Not a comparison against the reported side at all: it holds the
 		// counted rows against what the planner believes the table holds, so
 		// a stale or refused ANALYZE shows up as a figure rather than as a

@@ -555,6 +555,10 @@ Rows
 Pages
   public.orders                                reported        44053   generated        44121    +0.2%   ok
 
+Bytes/row
+  public.orders                                reported           96   generated           95    -1.0%   ok
+                                                 --stat-file: the export's avg_width added up over the table's columns, which is the sum the catalog reports back
+
 Selectivity
   public.orders.status = cancelled             reported       0.0398   generated       0.0401    +0.8%   ok
 
@@ -569,7 +573,9 @@ given rather than a second set written by hand:
 
 - the target EXPLAIN, the same file `explain-stat` reads, as a positional argument. Its
   row counts, page counts, selectivities and distinct counts become targets
-- `--stat-file`, whose `null_frac` and `most_common_freqs` become targets too.
+- `--stat-file`, whose `null_frac` and `most_common_freqs` become targets too, and
+  whose `avg_width` added up becomes the row width to hit — the same sum the run was
+  aimed at, and the same one the catalog reports back column for column.
   `--max-common-vals` caps how many values of each column are checked
 - `--rows`, for the sizes a plan cannot reveal on its own
 
@@ -578,11 +584,17 @@ actually produced is worth reading on its own. `--tolerance` sets how far a figu
 sit from its target before it is called `OFF`, and `--strict` turns any `OFF` into a
 non-zero exit status, for a script that should stop there.
 
-Two lines are printed but never fail a run. The row width compares the plan's `width=`,
-which counts only the columns that node outputs, against the catalog's, which counts
-every column of the row. The row estimate holds the counted rows against what the
-planner believes the table holds, which says whether the statistics are fresh rather
-than whether the data is right.
+The row width is held to when it came from a `--stat-file` covering the table whole,
+because both sides are then the same addition over the same columns. When it came from
+the plan it is printed and never failed on: a plan's `width=` counts only the columns
+that node outputs, and the catalog counts every column of the row. An export covering
+part of a table gives no width at all, and the report names the columns it is missing.
+On MySQL it is advisory either way, since InnoDB reports a sampled average row length
+with the record header in it rather than a sum of column widths.
+
+One more line is printed but never failed on: the row estimate holds the counted rows
+against what the planner believes the table holds, which says whether the statistics
+are fresh rather than whether the data is right.
 
 Page and row counts come from the catalog, which holds nothing at all for a table
 filled a moment ago, so `verify` runs an `ANALYZE` first. `--no-analyze` leaves the
@@ -733,7 +745,8 @@ Without clear plan:
 - a run whose tables point foreign keys at tables it does not fill is refused before anything is written, in one message naming the whole closure, instead of failing part way through with some tables already loaded; `--fill-fk-parents` adds those tables to the run instead
 - `--stat-file` no longer tries to insert the source database's parent ids into a foreign key column, which pointed it at rows that do not exist; the key's measured skew is reproduced instead, by sampling that share of the child's rows from one parent row each
 - `--query-param-freq` now defaults to 0 and is an override rather than a guess: nothing is inserted because a query mentions it unless you ask, and asking overrides what `--stat-file` measured for those values. A predicate no row will match is named in a warning, so an empty result explains itself
-- `export-stat` also dumps `avg_width`, and a `--stat-file` covering a table whole now sizes its rows from it, so the last figure of a reproduction that was still being read off the source database by hand sets itself. `--target-bytes-per-row` and `--target-relpages` still win, and a dump covering only part of a table is reported and left unused rather than aiming the table at a row narrower than the one being reproduced
+- `export-stat` also dumps `avg_width`; a `--stat-file` covering a table whole now sizes its rows from it, so the last figure of a reproduction that was still being read off the source database by hand sets itself. `--target-bytes-per-row` and `--target-relpages` still win, and a dump covering only part of a table is reported and left unused rather than aiming the table at a row narrower than the one being reproduced
+- `verify --stat-file` holds the generated row width against that same sum, and fails on it under `--strict` rather than only printing it, since the export and the catalog are the same addition over the same columns. A partial export still gives no target, and the report names the columns it is missing
 - a row width target now accounts for how often each filled column is NULL, instead of falling short of the target by that column's null fraction: a column NULL on a third of its rows is filled to what it has to hold on the other two thirds
 
 #### 0.2.3

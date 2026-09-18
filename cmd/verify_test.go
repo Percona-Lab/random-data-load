@@ -3,6 +3,8 @@ package cmd
 import (
 	"strings"
 	"testing"
+
+	"github.com/Percona-Lab/random-data-load/frequency"
 )
 
 func TestComparisonVerdict(t *testing.T) {
@@ -102,5 +104,71 @@ func TestReportSaysSoWhenNothingIsOff(t *testing.T) {
 
 	if got := report.summary(); !strings.HasPrefix(got, "Every figure") {
 		t.Errorf("summary = %q", got)
+	}
+}
+
+// The export's avg_width added up is the same sum the catalog reports back for
+// the generated table, so it is the row width to hold a run to -- when the
+// export covers the whole row.
+func TestWidthFromStats(t *testing.T) {
+	tests := []struct {
+		name    string
+		target  verifyTarget
+		want    int64
+		wantWhy string // substring the explanation has to carry
+	}{
+		{
+			name: "every column of the table measured",
+			target: verifyTarget{
+				table:   table("public", "t1", "c1", "c2"),
+				columns: []frequency.ColumnStats{column("t1", "c1", 4, 0), column("t1", "c2", 60, 0.5)},
+			},
+			// null_frac is not in it: an avg_width is measured over the rows
+			// holding a value, and so is the one it is compared against
+			want: 64,
+		},
+		{
+			name: "a column of the table the export does not cover",
+			target: verifyTarget{
+				table:   table("public", "t1", "c1", "c2"),
+				columns: []frequency.ColumnStats{column("t1", "c1", 4, 0)},
+			},
+			wantWhy: "c2",
+		},
+		{
+			name: "an export taken before avg_width was in it",
+			target: verifyTarget{
+				table:   table("public", "t1", "c1"),
+				columns: []frequency.ColumnStats{column("t1", "c1", 0, 0.25)},
+			},
+		},
+		{
+			name:   "no export at all",
+			target: verifyTarget{table: table("public", "t1", "c1")},
+		},
+		{
+			name: "a table that could not be read back says nothing about its width",
+			target: verifyTarget{
+				table:      table("public", "t1", "c1"),
+				columns:    []frequency.ColumnStats{column("t1", "c1", 4, 0)},
+				unreadable: "no such table",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, why := test.target.widthFromStats()
+
+			if got != test.want {
+				t.Errorf("widthFromStats() = %d, want %d", got, test.want)
+			}
+			switch {
+			case test.wantWhy == "" && why != "":
+				t.Errorf("widthFromStats() explained itself with %q, there was nothing to explain", why)
+			case test.wantWhy != "" && !strings.Contains(why, test.wantWhy):
+				t.Errorf("widthFromStats() explained itself with %q, which never names %q", why, test.wantWhy)
+			}
+		})
 	}
 }

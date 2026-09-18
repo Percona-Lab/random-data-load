@@ -859,6 +859,11 @@ func TestRun(t *testing.T) {
 			checkQuery: "select (count(*) = 100000) and (avg(pg_column_size(t1.*)) > 45) from t1;",
 			engines:    []string{"pg"},
 			cmds:       [][]string{[]string{"--rows=100000", "--table=t1", "--stat-file=tests/pg/pg_stats_partial.json"}},
+			// and verify does not hold the table against that partial sum
+			// either: it says which column is missing from the export and
+			// leaves the width without a target, rather than calling a
+			// correct table too wide
+			verify: []string{"--table=t1", "--rows=100000", "--stat-file=tests/pg/pg_stats_partial.json", "--tolerance=0.1"},
 		},
 
 		// The same pass over a foreign key relationship, on both engines: row
