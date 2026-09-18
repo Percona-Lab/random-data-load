@@ -110,7 +110,11 @@ func (cmd *ExportStatCmd) sql(tables, columns []string) string {
 
 	var b strings.Builder
 	b.WriteString("SELECT coalesce(json_agg(s), '[]'::json)\n")
-	b.WriteString("  FROM (SELECT schemaname, tablename, attname, null_frac,\n")
+	// avg_width sizes the rows: summed over a table's columns it is the row
+	// width the plan's "width=" is built from, and the one the page count
+	// follows, so a dump covering every column of a table saves the caller
+	// working out a --target-bytes-per-row by hand.
+	b.WriteString("  FROM (SELECT schemaname, tablename, attname, null_frac, avg_width,\n")
 	// most_common_vals is an anyarray: it has no output function of its own,
 	// so it goes through text before it can be read as an array of values.
 	fmt.Fprintf(&b, "               (most_common_vals::text::text[])%s AS most_common_vals,\n", slice)

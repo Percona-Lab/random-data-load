@@ -214,17 +214,27 @@ func (in *Insert) calibrate() error {
 		return nil
 	}
 
+	// Two figures per column, both averaged over every row rather than over
+	// the rows holding a value: what it takes today, and how often it holds
+	// anything at all. The second one is what turns a share of the row into a
+	// length to write, since a column that is NULL on a third of its rows only
+	// carries its share on the other two thirds.
 	natural := make([]float64, len(fields))
+	written := make([]float64, len(fields))
 	for _, row := range values {
 		for column, value := range row {
 			natural[column] += float64(storageWidth(fields[column], value))
+			if text, known := valueText(value); known && text != NULL {
+				written[column]++
+			}
 		}
 	}
 	for column := range natural {
 		natural[column] /= float64(len(values))
+		written[column] /= float64(len(values))
 	}
 
-	in.widthTarget.lengths = in.distributeFiller(fields, natural)
+	in.widthTarget.lengths = in.distributeFiller(fields, natural, written)
 	return nil
 }
 
@@ -236,20 +246,32 @@ func (in *Insert) calibrate() error {
 // shape instead of flattening to two equal columns. A column that cannot take
 // its share -- char(8) has nowhere to put 400 bytes -- is pinned at what it can
 // hold and its remainder goes back to the others.
-func (in *Insert) distributeFiller(fields []db.Field, natural []float64) map[string]int64 {
+//
+// Every figure here is a per-row average, NULLs included, because that is what
+// the target is: a table's width is what its rows take on average, not what
+// its values take when it has one. A column NULL on a third of its rows
+// therefore carries two thirds of the length written into it and can hold two
+// thirds of what its type allows, which is what written[] converts between --
+// without it a nullable column quietly fell short of the target by its own
+// null fraction, and a --stat-file run, where every null fraction is a
+// measured one, would fall short by all of them at once.
+func (in *Insert) distributeFiller(fields []db.Field, natural, written []float64) map[string]int64 {
 	target := in.widthTarget.bytesPerRow
 
 	fillable := []int{}
 	caps := map[int]float64{}
 	var fixed, fillableNatural float64
 	for column, field := range fields {
-		if !in.fillable(field) {
+		// A column that came out NULL on every calibration row carries
+		// nothing whatever is written into it, so it is no more fillable than
+		// an integer is.
+		if !in.fillable(field) || written[column] <= 0 {
 			fixed += natural[column]
 			continue
 		}
 		fillable = append(fillable, column)
 		fillableNatural += natural[column]
-		caps[column] = float64(varlenaWidth(in.maxLengthOf(field)))
+		caps[column] = float64(varlenaWidth(in.maxLengthOf(field))) * written[column]
 	}
 
 	if len(fillable) == 0 {
@@ -276,7 +298,7 @@ func (in *Insert) distributeFiller(fields []db.Field, natural []float64) map[str
 	var total float64 = fixed
 	for _, column := range fillable {
 		total += shares[column]
-		lengths[strings.ToLower(fields[column].ColumnName)] = lengthForWidth(shares[column])
+		lengths[strings.ToLower(fields[column].ColumnName)] = lengthForWidth(shares[column] / written[column])
 	}
 
 	in.reportCalibration(fields, natural, lengths, int64(math.Round(total)))

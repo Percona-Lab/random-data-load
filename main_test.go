@@ -835,11 +835,30 @@ func TestRun(t *testing.T) {
 		// the run was given. The statistics export is the sharpest input it
 		// takes: every null fraction and every common value's frequency in it
 		// is a figure the generated table has to land on.
+		//
+		// The export covers t1 whole, so it also sizes the rows, with nothing
+		// asked for on the command line: 4, 11 and 60 bytes per value, on the
+		// 0.90, 0.75 and 1.00 of the rows that hold one, is 72 bytes of
+		// columns, which is 96 with the tuple header on top.
 		{
-			name:    "pg_stats",
-			engines: []string{"pg"},
-			cmds:    [][]string{[]string{"--rows=100000", "--table=t1", "--stat-file=tests/pg/pg_stats.json"}},
-			verify:  []string{"--table=t1", "--rows=100000", "--stat-file=tests/pg/pg_stats.json", "--tolerance=0.1"},
+			name:       "pg_stats",
+			checkQuery: "select (count(*) = 100000) and (avg(pg_column_size(t1.*)) between 92 and 100) from t1;",
+			engines:    []string{"pg"},
+			cmds:       [][]string{[]string{"--rows=100000", "--table=t1", "--stat-file=tests/pg/pg_stats.json"}},
+			verify:     []string{"--table=t1", "--rows=100000", "--stat-file=tests/pg/pg_stats.json", "--tolerance=0.1"},
+		},
+
+		// The same export with c3 left out of it, which is what a
+		// --query-scoped one looks like. Its columns add up to 12 bytes, which
+		// is not a row of t1, and aiming at it would shrink c3 to nothing and
+		// leave the table at 36 bytes a row, header included. The width is
+		// left alone instead, so c3 is generated at its natural length and the
+		// row stays well clear of that.
+		{
+			name:       "pg_stats",
+			checkQuery: "select (count(*) = 100000) and (avg(pg_column_size(t1.*)) > 45) from t1;",
+			engines:    []string{"pg"},
+			cmds:       [][]string{[]string{"--rows=100000", "--table=t1", "--stat-file=tests/pg/pg_stats_partial.json"}},
 		},
 
 		// The same pass over a foreign key relationship, on both engines: row

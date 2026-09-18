@@ -35,11 +35,18 @@ func TestParseStats(t *testing.T) {
 	}{
 		{
 			name:  "a row of every field",
-			input: `[{"schemaname":"public","tablename":"t1","attname":"c1","null_frac":0.25,"most_common_vals":["a","b"],"most_common_freqs":[0.5,0.2]}]`,
+			input: `[{"schemaname":"public","tablename":"t1","attname":"c1","null_frac":0.25,"avg_width":37,"most_common_vals":["a","b"],"most_common_freqs":[0.5,0.2]}]`,
 			want: []ColumnStats{{
-				Schemaname: "public", Tablename: "t1", Attname: "c1", NullFrac: 0.25,
+				Schemaname: "public", Tablename: "t1", Attname: "c1", NullFrac: 0.25, AvgWidth: 37,
 				MostCommonVals: []string{"a", "b"}, MostCommonFreqs: []float64{0.5, 0.2},
 			}},
+		},
+		{
+			// a dump taken before this tool asked for a width still loads, it
+			// just has no width to hand over
+			name:  "a dump from before avg_width was exported",
+			input: `[{"schemaname":"public","tablename":"t1","attname":"c1","null_frac":0.25}]`,
+			want:  []ColumnStats{{Schemaname: "public", Tablename: "t1", Attname: "c1", NullFrac: 0.25}},
 		},
 		{
 			name:  "a column with no statistics at all still carries its null_frac",
@@ -330,5 +337,32 @@ func TestWillInsert(t *testing.T) {
 	// need not agree on case
 	if !WillInsert("ORDERS", "Status", "cancelled") {
 		t.Error("the lookup is case sensitive")
+	}
+}
+
+// A column's width is measured over the rows holding a value, and a row width
+// is measured over every row. Getting that wrong reproduces a table twice as
+// wide as the one being copied, on a column that is NULL half the time.
+func TestStoredWidth(t *testing.T) {
+	tests := []struct {
+		name string
+		cs   ColumnStats
+		want float64
+	}{
+		{name: "a column with no NULL is its own width", cs: ColumnStats{AvgWidth: 40}, want: 40},
+		{name: "half the rows carry half the width", cs: ColumnStats{AvgWidth: 100, NullFrac: 0.5}, want: 50},
+		{name: "a column that is always NULL takes nothing", cs: ColumnStats{AvgWidth: 100, NullFrac: 1}, want: 0},
+		{name: "a dump carrying no width says nothing about one", cs: ColumnStats{NullFrac: 0.5}, want: 0},
+		// pg_stats never reports either of these, but a hand-edited dump can
+		{name: "a negative width is not a negative row", cs: ColumnStats{AvgWidth: -4}, want: 0},
+		{name: "a null fraction outside 0..1 is clamped", cs: ColumnStats{AvgWidth: 100, NullFrac: 1.5}, want: 0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.cs.StoredWidth(); math.Abs(got-test.want) > 1e-9 {
+				t.Errorf("StoredWidth() = %g, want %g", got, test.want)
+			}
+		})
 	}
 }

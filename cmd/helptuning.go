@@ -41,7 +41,7 @@ asking is: which statistic am I trying to move, and which flag moves it?
   ----------------------   --------------------------------------------------
   table size               --rows
   row width, page count    --no-skip-fields, --target-bytes-per-row,
-                           --target-relpages
+                           --target-relpages, --stat-file
   how often a value        --stat-file, --values-freq-map, --null-freq,
                            --query-param-freq
   how a key fans out       --default-relationship, --binomial, --sequential,
@@ -98,6 +98,18 @@ Both take the per-table form: --target-relpages="orders=8045;customers=3975".
 Neither can work on a table whose generated columns hold no free text to
 stretch, which the run says when it happens.
 
+--stat-file sets the width on its own, for nothing. pg_stats holds an
+avg_width per column, and added up over a table's columns that is the width of
+a row, measured on the database being reproduced rather than worked out by
+hand. Either flag above overrides it.
+
+It only does so for a table the dump covers whole. The columns of a dump
+narrowed by a --query add up to less than a row, and a width target that is
+too low is worse than none: the table takes fewer pages than it should, a
+sequential scan looks cheaper than it is, and the plan flips. The run names the
+columns it is missing and leaves the width alone. "export-stat --table=NAME",
+with no --query, dumps the table whole.
+
 
 How often a value occurs
 ------------------------
@@ -105,10 +117,11 @@ How often a value occurs
 A filter's selectivity decides join order, so the fraction of rows matching
 "status='cancelled'" matters more than which rows they are.
 
---stat-file replays a column statistics export: null_frac, most_common_vals
-and most_common_freqs, for every column it covers. It is the sharpest input
-there is, because it is a measurement rather than a guess. "export-stat"
-prints the command that produces the file.
+--stat-file replays a column statistics export: null_frac, most_common_vals,
+most_common_freqs and avg_width, for every column it covers. It is the
+sharpest input there is, because it is a measurement rather than a guess.
+"export-stat" prints the command that produces the file. What it does with
+avg_width is under "Row width and page count" above.
 
 --values-freq-map injects chosen values at chosen frequencies, per column:
 

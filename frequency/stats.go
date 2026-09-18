@@ -10,9 +10,9 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// ColumnStats is one pg_stats row, reduced to the three figures this tool knows
-// how to reproduce. The field names are pg_stats' own, so the dump query needs
-// no column aliases and the file stays readable next to the catalog.
+// ColumnStats is one pg_stats row, reduced to the figures this tool knows how
+// to reproduce. The field names are pg_stats' own, so the dump query needs no
+// column aliases and the file stays readable next to the catalog.
 type ColumnStats struct {
 	Schemaname string `json:"schemaname"`
 	Tablename  string `json:"tablename"`
@@ -20,11 +20,37 @@ type ColumnStats struct {
 
 	NullFrac float64 `json:"null_frac"`
 
+	// AvgWidth is what one value of the column takes once stored, averaged
+	// over the rows that hold one: ANALYZE adds up the widths it measured and
+	// divides by the number of non-null values it saw, so the NULLs are not
+	// in it. StoredWidth puts them back. It is zero in a dump taken before
+	// this tool asked for the column.
+	AvgWidth int64 `json:"avg_width"`
+
 	// Both arrays are indexed together: MostCommonVals[i] appears on
 	// MostCommonFreqs[i] of the rows. postgres reports them separately and
 	// either can be absent.
 	MostCommonVals  []string  `json:"most_common_vals"`
 	MostCommonFreqs []float64 `json:"most_common_freqs"`
+}
+
+// StoredWidth is what this column adds to a row of the table it was measured
+// on, this time averaged over every row rather than over the ones holding a
+// value.
+//
+// The two differ by the null fraction, and which one to aim at is not a matter
+// of taste. A column measured at 100 bytes on half its rows has to come out
+// here at 100 bytes on half its rows too: aiming the generator at 100 bytes
+// per row would write 100 bytes into each of the values it does write, on top
+// of the NULLs it draws for the other half, and the reproduction would end up
+// with an avg_width of 200 and twice the pages. Aiming at 50 lands on both
+// figures at once -- the same avg_width, so the same plan "width=", and the
+// same storage, so the same page count.
+func (cs ColumnStats) StoredWidth() float64 {
+	if cs.AvgWidth <= 0 {
+		return 0
+	}
+	return float64(cs.AvgWidth) * (1 - min(max(cs.NullFrac, 0), 1))
 }
 
 // Target is where a dumped column lands in the current run.

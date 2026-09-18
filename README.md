@@ -118,7 +118,7 @@ Common options:
 |--null-freq|How often a nullable column is NULL, as a fraction between 0 and 1. One number for every column, or per column, or both: `--null-freq="0.1;t1.c1=0.73;t1.c2=0.04"` leaves every other column at 10% and sets 73% and 4% on those two (Default: 0.1)|
 |--values-freq-map|Inject arbitrary values at fixed frequencies. The format is "--values-freq-map=t1.c1=val1:0.75,val2:0.23;t1.c2=10:0.99" so that val1 will be on 75% of rows and val2 on 23% for column c1|
 |--query-param-freq|Insert the literals the `--query` compares a column to, on this fraction of the rows, so the query returns something. Defaults to 0: it is a selectivity nobody measured, so it is only applied when asked for, and it then overrides anything `--stat-file` says about those values. The run names the predicates nothing will match|
-|--stat-file|Scan a column statistics export and reuse its null_frac, most_common_vals and most_common_freqs instead of setting --null-freq and --values-freq-map by hand. Use the `export-stat` subcommand to get the command producing that file|
+|--stat-file|Scan a column statistics export and reuse its null_frac, most_common_vals and most_common_freqs instead of setting --null-freq and --values-freq-map by hand, and its avg_width instead of setting --target-bytes-per-row. Use the `export-stat` subcommand to get the command producing that file|
 |--min-generated-time|Generated timestamps will be after this date. Format is RFC3339. Will default to --max-generated-time - 1 year|
 |--max-generated-time|Generated timestamps will be before this date. Format is RFC3339. Will default to now()|
 
@@ -374,7 +374,9 @@ Conditions on either side of an OR are kept as separate single-column keys, neve
 Setting `--null-freq` and `--values-freq-map` by hand means knowing the shape of
 the production data in the first place. Postgres already measured it: `pg_stats` holds
 a `null_frac`, a `most_common_vals` and a `most_common_freqs` for every analyzed
-column, and those three are exactly what the two options take.
+column, and those three are exactly what the two options take. It also holds an
+`avg_width`, which is what `--target-bytes-per-row` takes once added up over a table's
+columns.
 
 `export-stat` prints the command that dumps them. It reads nothing but `pg_stats`,
 so it is safe to hand over to whoever has access to the database being copied:
@@ -389,7 +391,7 @@ random-data-load export-stat --engine=pg --query="select o.total from customers 
 #   random-data-load run --stat-file=pg_stats.json ...
 psql -X -q -A -t -d shop -f - > pg_stats.json <<'SQL'
 SELECT coalesce(json_agg(s), '[]'::json)
-  FROM (SELECT schemaname, tablename, attname, null_frac,
+  FROM (SELECT schemaname, tablename, attname, null_frac, avg_width,
                (most_common_vals::text::text[]) AS most_common_vals,
                most_common_freqs
           FROM pg_stats
@@ -401,7 +403,8 @@ SQL
 
 The dump is narrowed down to the tables and columns the `--query` uses, the same
 whitelist that decides which fields get generated. Without a `--query`, or with one
-selecting a `*`, it covers every column of the tables instead. `--max-common-vals`
+selecting a `*`, it covers every column of the tables instead — which is also what a
+row width needs, since a subset of the columns adds up to less than a row. `--max-common-vals`
 caps how many common values each column contributes, since postgres stores up to
 `default_statistics_target` of them.
 
@@ -445,6 +448,12 @@ A few things worth knowing:
   the `null_frac` that was measured
 - frequencies that add up to more than 1 are warned about, and NULL then takes
   whatever share is left
+- **the row width comes with it**, for a table the dump covers whole: the columns'
+  `avg_width` added up is what `--target-bytes-per-row` would have had to be given by
+  hand. A dump narrowed by a `--query` covers part of a row, so the run names the
+  columns it is missing and leaves the width alone rather than aiming the table at
+  something too narrow. Either width flag overrides it. See
+  [Aiming a table at a row width or a page count](#aiming-a-table-at-a-row-width-or-a-page-count)
 
 `--engine=mysql` is refused for now rather than exporting something unusable:
 `information_schema.COLUMN_STATISTICS` only holds histograms, and only for the
@@ -480,6 +489,25 @@ Either end of the same target can be asked for:
 
 Both take a value per table, the same way the sampler tuning does:
 `--target-bytes-per-row="97;order_items=24"`.
+
+There is a third way, which costs nothing: **a `--stat-file` covering a table whole
+sizes its rows on its own**, since `pg_stats` measured an `avg_width` per column on the
+database being reproduced. A flag overrides it, and a dump that covers only part of a
+table is reported and left unused — see
+[Reusing the data distribution of a real database](#reusing-the-data-distribution-of-a-real-database).
+
+```
+INF the dump measures orders at 96 bytes per row over its 9 columns, so that is what
+    its rows are aimed at. --target-bytes-per-row overrides it
+```
+
+A column's `avg_width` is measured over the rows holding a value, and a row width over
+every row, so each column counts for `avg_width * (1 - null_frac)`. That is the figure
+that reproduces both at once: a column of 100 bytes on half its rows has to come out at
+100 bytes on half its rows here too, and aiming at 100 per row would write 100 into
+every value it does write and end up twice as wide as the table being copied. The same
+correction applies to the filling itself, so a nullable column is filled to what it has
+to hold on the rows it is there for.
 
 How it gets there: before the run starts, a few hundred rows are generated and measured
 to find out how wide a row comes out on its own, and the difference is written into the
@@ -705,6 +733,8 @@ Without clear plan:
 - a run whose tables point foreign keys at tables it does not fill is refused before anything is written, in one message naming the whole closure, instead of failing part way through with some tables already loaded; `--fill-fk-parents` adds those tables to the run instead
 - `--stat-file` no longer tries to insert the source database's parent ids into a foreign key column, which pointed it at rows that do not exist; the key's measured skew is reproduced instead, by sampling that share of the child's rows from one parent row each
 - `--query-param-freq` now defaults to 0 and is an override rather than a guess: nothing is inserted because a query mentions it unless you ask, and asking overrides what `--stat-file` measured for those values. A predicate no row will match is named in a warning, so an empty result explains itself
+- `export-stat` also dumps `avg_width`, and a `--stat-file` covering a table whole now sizes its rows from it, so the last figure of a reproduction that was still being read off the source database by hand sets itself. `--target-bytes-per-row` and `--target-relpages` still win, and a dump covering only part of a table is reported and left unused rather than aiming the table at a row narrower than the one being reproduced
+- a row width target now accounts for how often each filled column is NULL, instead of falling short of the target by that column's null fraction: a column NULL on a third of its rows is filled to what it has to hold on the other two thirds
 
 #### 0.2.3
 - NULL and/or fixed values can be injected at tunable rates

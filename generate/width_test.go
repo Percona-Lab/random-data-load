@@ -1,6 +1,12 @@
 package generate
 
-import "testing"
+import (
+	"database/sql"
+	"math"
+	"testing"
+
+	"github.com/Percona-Lab/random-data-load/db"
+)
 
 // A page holds a whole number of rows and a tuple is a whole number of
 // alignment boundaries wide, so a target page count is not always reachable.
@@ -99,5 +105,79 @@ func TestShareOutRedistributesWhatAColumnCannotHold(t *testing.T) {
 	}
 	if total := shares[0] + shares[1]; total != 400 {
 		t.Errorf("the two columns carry %g bytes between them, the budget was 400", total)
+	}
+}
+
+// A width target is what the rows take on average, and a column that is NULL
+// on some of them only carries what is written into it on the others. Aiming
+// at the target without accounting for that leaves the table short by each
+// column's null fraction -- which a --stat-file run, whose null fractions are
+// all measured ones, would hit on every column at once.
+func TestFillerAccountsForTheRowsAColumnIsMissingFrom(t *testing.T) {
+	fields := []db.Field{
+		{ColumnName: "c1", DataType: "int"},
+		{ColumnName: "c2", DataType: "text"},
+	}
+	// c1 is 4 bytes on every row, c2 holds 40 bytes on half of them
+	natural := []float64{4, 20}
+	written := []float64{1, 0.5}
+
+	in := &Insert{table: &db.Table{Name: "t1"}, maxTextSize: 65535, widthTarget: &rowWidthTarget{bytesPerRow: 104}}
+	lengths := in.distributeFiller(fields, natural, written)
+
+	length, ok := lengths["c2"]
+	if !ok {
+		t.Fatalf("c2 was left out of the filling: %v", lengths)
+	}
+	// c2 carries the 100 bytes c1 leaves it, on the half of the rows it is
+	// there for, so each of those values has to hold twice that
+	if got := float64(varlenaWidth(length)) * written[1]; math.Abs(got-100) > 1 {
+		t.Errorf("c2 was filled to %d bytes, which averages %g over its rows, want 100", length, got)
+	}
+}
+
+// The same correction the other way round: what a column can hold is also
+// spread over the rows it is missing from, or a narrow column looks roomier
+// than it is and the budget handed to it is never written anywhere.
+func TestAColumnsCapIsSpreadOverTheRowsItIsMissingFrom(t *testing.T) {
+	fields := []db.Field{
+		{ColumnName: "c1", DataType: "varchar", CharacterMaximumLength: sql.NullInt64{Int64: 12, Valid: true}},
+		{ColumnName: "c2", DataType: "text"},
+	}
+	natural := []float64{6, 20}
+	written := []float64{0.5, 1}
+
+	in := &Insert{table: &db.Table{Name: "t1"}, maxTextSize: 65535, widthTarget: &rowWidthTarget{bytesPerRow: 200}}
+	lengths := in.distributeFiller(fields, natural, written)
+
+	if lengths["c1"] != 12 {
+		t.Errorf("varchar(12) was filled to %d, it holds 12 characters", lengths["c1"])
+	}
+	// filled to the brim, c1 still only averages 6.5 bytes a row, so the rest
+	// of the target is c2's to carry
+	got := float64(varlenaWidth(lengths["c1"]))*written[0] + float64(varlenaWidth(lengths["c2"]))*written[1]
+	if math.Abs(got-200) > 2 {
+		t.Errorf("the two columns average %g bytes a row between them, the target was 200", got)
+	}
+}
+
+// A column that came out NULL on every row carries nothing whatever is written
+// into it, so the budget has to go to the columns that do hold something.
+func TestAColumnThatIsAlwaysNullCarriesNothing(t *testing.T) {
+	fields := []db.Field{
+		{ColumnName: "c1", DataType: "text"},
+		{ColumnName: "c2", DataType: "text"},
+	}
+	natural := []float64{0, 20}
+	written := []float64{0, 1}
+
+	in := &Insert{table: &db.Table{Name: "t1"}, maxTextSize: 65535, widthTarget: &rowWidthTarget{bytesPerRow: 100}}
+	lengths := in.distributeFiller(fields, natural, written)
+
+	if _, ok := lengths["c1"]; ok {
+		t.Errorf("c1 is NULL on every row, filling it to %d changes nothing", lengths["c1"])
+	}
+	if got := varlenaWidth(lengths["c2"]); math.Abs(float64(got)-100) > 1 {
+		t.Errorf("c2 carries %d bytes, it has the whole 100 to itself", got)
 	}
 }

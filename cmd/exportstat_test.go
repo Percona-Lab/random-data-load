@@ -74,12 +74,20 @@ func TestExportStatSQL(t *testing.T) {
 			want: []string{"schemaname = 'it''s'", "lower(tablename) IN ('o''rders')"},
 		},
 		{
-			name: "only the three figures the tool can reproduce are asked for",
+			name: "only the figures the tool can reproduce are asked for",
 			cmd:  ExportStatCmd{Engine: "pg", Table: "orders", Schema: "public"},
-			want: []string{"null_frac", "most_common_vals", "most_common_freqs"},
+			want: []string{"null_frac", "avg_width", "most_common_vals", "most_common_freqs"},
 			// pg_stats is wide, and the rest of it would be dead weight in a
 			// file meant to travel out of a production database
-			notWant: []string{"n_distinct", "histogram_bounds", "correlation", "avg_width", "*"},
+			notWant: []string{"n_distinct", "histogram_bounds", "correlation", "*"},
+		},
+		{
+			// the arrays are the only thing --max-common-vals slices; a width
+			// is one number per column and is asked for whole
+			name:    "avg_width survives --max-common-vals",
+			cmd:     ExportStatCmd{Engine: "pg", Table: "orders", Schema: "public", MaxCommonVals: 5},
+			want:    []string{"null_frac, avg_width,"},
+			notWant: []string{"avg_width[1:"},
 		},
 	}
 

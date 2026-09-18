@@ -46,7 +46,13 @@ type RunCmd struct {
 	TargetBytesPerRow generate.PerTableFloat                  `name:"target-bytes-per-row" help:"Aim a table at an average row width in bytes, the plan's \"width=\": --target-bytes-per-row=\"97;order_items=24\"" default:""`
 	TargetRelpages    generate.PerTableFloat                  `name:"target-relpages" help:"Aim a table at a page count, what a sequential scan is costed from: --target-relpages=\"orders=8045\". Postgres only." default:""`
 
-	StatFile string `name:"stat-file" help:"Replay a column statistics export: null_frac, most_common_vals and most_common_freqs. See the \"export-stat\" subcommand." type:"path"`
+	StatFile string `name:"stat-file" help:"Replay a column statistics export: null_frac, most_common_vals, most_common_freqs, and avg_width as a row width. See the \"export-stat\" subcommand." type:"path"`
+
+	// statBytesPerRow is the row width each table's dumped avg_width adds up
+	// to, filled in when --stat-file is read. Unexported so that kong leaves
+	// it alone: it is not a flag, it is what a flag would have had to be given
+	// by hand.
+	statBytesPerRow map[string]int64
 }
 
 // Run starts inserting data.
@@ -244,18 +250,24 @@ func (cmd *RunCmd) checkWidthTargets() error {
 	return nil
 }
 
-// rowWidthTarget is the width this table's rows are aimed at, in bytes.
+// rowWidthTarget is the width this table's rows are aimed at, in bytes, from
+// whichever of the three ways of asking for one was used.
 //
 // --target-relpages is the figure a plan actually turns on, and it is the same
 // target seen from the other side: the row count this run was given says how
 // many rows have to fit in those pages, and postgres' page layout says how
-// wide a row that makes.
+// wide a row that makes. A --stat-file covering the table whole is the third,
+// and the only one nobody had to work out: see widthsFromStats.
 func (cmd *RunCmd) rowWidthTarget(table *db.Table, rows int64) int64 {
 	if cmd.TargetBytesPerRow.IsSetFor(table.Name) {
 		return int64(math.Round(cmd.TargetBytesPerRow.For(table.Name)))
 	}
 	if !cmd.TargetRelpages.IsSetFor(table.Name) {
-		return 0
+		// The dump comes last because a flag is something the caller asked for
+		// by hand, and first would mean a measurement quietly outranking it.
+		// Zero when --stat-file was not given, or when it did not cover this
+		// table whole, which is what "no target" has always been.
+		return cmd.statBytesPerRow[strings.ToLower(table.Name)]
 	}
 
 	pages := int64(math.Round(cmd.TargetRelpages.For(table.Name)))
@@ -503,7 +515,84 @@ func (cmd *RunCmd) mergeStats(tables []*db.Table) error {
 		}
 		return frequency.Target{}, false
 	})
+
+	cmd.widthsFromStats(stats, tables)
 	return nil
+}
+
+// widthsFromStats works out, per table, the row width the dump describes.
+//
+// avg_width is the one figure in pg_stats that is not about a single column's
+// values: added up over a table's columns it is the width of a row, which is
+// what a plan's "width=" is built from and what decides how many rows fit in a
+// page. That was the last figure of a reproduction still being set by hand,
+// with a --target-bytes-per-row read off the source database, so a dump that
+// covers a table whole sets it here instead.
+//
+// Covers it whole is the condition, and it is not a formality. The sum of a
+// subset of the columns is a narrower row than the source's, and a width
+// target that is too low is worse than none at all: it shrinks the fillable
+// columns, the table takes fewer pages than it should, a sequential scan looks
+// cheaper than it is, and the plan flips -- the failure that looks like
+// success. A dump narrowed by a --query is exactly that subset, so it is
+// reported and the width is left alone.
+func (cmd *RunCmd) widthsFromStats(stats []frequency.ColumnStats, tables []*db.Table) {
+	cmd.statBytesPerRow = map[string]int64{}
+
+	for _, table := range tables {
+		if cmd.TargetBytesPerRow.IsSetFor(table.Name) || cmd.TargetRelpages.IsSetFor(table.Name) {
+			log.Debug().Str("table", table.Name).Msg("row width asked for on the command line, not reading one out of the dump")
+			continue
+		}
+
+		covered := map[string]struct{}{}
+		var width float64
+		var measured int
+		for _, cs := range stats {
+			if !strings.EqualFold(table.Name, cs.Tablename) {
+				continue
+			}
+			if cs.Schemaname != "" && table.Schema != "" && !strings.EqualFold(table.Schema, cs.Schemaname) {
+				continue
+			}
+			covered[strings.ToLower(cs.Attname)] = struct{}{}
+			if cs.AvgWidth > 0 {
+				measured++
+			}
+			// A column of the source the local table does not have still
+			// counts: the row it was part of was that wide, and reaching that
+			// width here is the whole point.
+			width += cs.StoredWidth()
+		}
+		if len(covered) == 0 {
+			continue
+		}
+		if measured == 0 {
+			log.Debug().Str("table", table.Name).Msg("the dump carries no avg_width for this table, it was taken before this tool asked for one. Leaving its row width alone")
+			continue
+		}
+
+		missing := []string{}
+		for _, field := range table.Fields {
+			if _, ok := covered[strings.ToLower(field.ColumnName)]; !ok {
+				missing = append(missing, field.ColumnName)
+			}
+		}
+		if len(missing) > 0 {
+			log.Warn().Str("table", table.Name).Strs("missing", missing).
+				Msgf("the dump does not cover %s of %s, so the avg_width it holds adds up to less than a row. Leaving its width alone rather than aiming it at a row that is too narrow: re-export the table whole with \"export-stat --table=%s\", or set the width with --target-bytes-per-row",
+					strings.Join(missing, ", "), table.Name, table.Name)
+			continue
+		}
+
+		bytes := int64(math.Round(width))
+		if bytes <= 0 {
+			continue
+		}
+		cmd.statBytesPerRow[strings.ToLower(table.Name)] = bytes
+		log.Info().Str("table", table.Name).Int64("bytesPerRow", bytes).Int("columns", len(covered)).
+			Msgf("the dump measures %s at %d bytes per row over its %d columns, so that is what its rows are aimed at. --target-bytes-per-row overrides it", table.Name, bytes, len(covered))
+	}
 }
 
 func (cmd *RunCmd) run(table *db.Table) error {
