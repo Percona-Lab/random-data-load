@@ -87,7 +87,7 @@ func main() {
 	if cli.Debug {
 		zerolog.SetGlobalLevel(zerolog.DebugLevel)
 	}
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+	log.Logger = log.Output(cmd.ConsoleLog(os.Stderr))
 
 	if cli.Profile {
 		f, err := os.Create(cli.CPUProfPath)

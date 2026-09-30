@@ -548,25 +548,21 @@ random-data-load verify --engine=pg --database=shop --query="..." plan.txt \
 ```
 
 ```
-Rows
-  public.customers                             reported       200000   generated       200000    +0.0%   ok
-  public.orders                                reported      3600000   generated      3600000    +0.0%   ok
+Rows  (given)
+  public.inventory                             reported       400000   generated            0  -100.0%   OFF
 
-Pages
-  public.orders                                reported        44053   generated        44121    +0.2%   ok
+Null fraction  (--stat-file)
+  public.categories.parent_id                  reported       0.1000   generated       0.5000  +400.2%   OFF
 
-Bytes/row
-  public.orders                                reported           96   generated           95    -1.0%   ok
-                                                 --stat-file: the export's avg_width added up over the table's columns, which is the sum the catalog reports back
+Not shown: 189 within 0.0500 of their target, 12 with no target, 29 whose two sides measure different things. --all prints every figure.
 
-Selectivity
-  public.orders.status = cancelled             reported       0.0398   generated       0.0401    +0.8%   ok
-
-Value frequency
-  public.orders.status = shipped               reported       0.5055   generated       0.5061    +0.1%   ok
-
-Every figure with a target sits within 0.0500 of it.
+2 figures sit outside 0.0500 of their target.
 ```
+
+Only what needs looking at is printed: the figures outside `--tolerance`, and the ones
+that could not be read back. The rest are counted on the `Not shown` line, and `--all`
+prints every figure, `ok` ones included. A caption most lines of a section share is
+said once, next to the section's name.
 
 It takes the same inputs the run took, so the expectations are the ones the run was
 given rather than a second set written by hand:
@@ -579,22 +575,27 @@ given rather than a second set written by hand:
   `--max-common-vals` caps how many values of each column are checked
 - `--rows`, for the sizes a plan cannot reveal on its own
 
-A figure the reported side never gave is still printed, marked `no target`: what a run
-actually produced is worth reading on its own. `--tolerance` sets how far a figure may
+A figure the reported side never gave is printed by `--all`, marked `no target`: what a
+run actually produced is worth reading on its own. `--tolerance` sets how far a figure may
 sit from its target before it is called `OFF`, and `--strict` turns any `OFF` into a
 non-zero exit status, for a script that should stop there.
 
 The row width is held to when it came from a `--stat-file` covering the table whole,
 because both sides are then the same addition over the same columns. When it came from
-the plan it is printed and never failed on: a plan's `width=` counts only the columns
-that node outputs, and the catalog counts every column of the row. An export covering
+the plan it is only printed by `--all` and never failed on: a plan's `width=` counts only
+the columns that node outputs, and the catalog counts every column of the row. An export covering
 part of a table gives no width at all, and the report names the columns it is missing.
 On MySQL it is advisory either way, since InnoDB reports a sampled average row length
 with the record header in it rather than a sum of column widths.
 
-One more line is printed but never failed on: the row estimate holds the counted rows
-against what the planner believes the table holds, which says whether the statistics
-are fresh rather than whether the data is right.
+One more line is printed when it is off but never failed on: the row estimate holds the
+counted rows against what the planner believes the table holds, which says whether the
+statistics are fresh rather than whether the data is right.
+
+The most common values of a foreign key are not held against the export either. They
+are the source database's parent ids, which `run` never inserts: it reproduces how
+skewed the key is instead. They are printed by `--all` and never failed on. The key's
+`null_frac` is still a target like any other column's.
 
 Page and row counts come from the catalog, which holds nothing at all for a table
 filled a moment ago, so `verify` runs an `ANALYZE` first. `--no-analyze` leaves the
@@ -748,6 +749,7 @@ Without clear plan:
 - `export-stat` also dumps `avg_width`; a `--stat-file` covering a table whole now sizes its rows from it, so the last figure of a reproduction that was still being read off the source database by hand sets itself. `--target-bytes-per-row` and `--target-relpages` still win, and a dump covering only part of a table is reported and left unused rather than aiming the table at a row narrower than the one being reproduced
 - `verify --stat-file` holds the generated row width against that same sum, and fails on it under `--strict` rather than only printing it, since the export and the catalog are the same addition over the same columns. A partial export still gives no target, and the report names the columns it is missing
 - a row width target now accounts for how often each filled column is NULL, instead of falling short of the target by that column's null fraction: a column NULL on a third of its rows is filled to what it has to hold on the other two thirds
+- `verify` prints only the figures outside `--tolerance` and the ones it could not read back, and counts the rest; `--all` prints every figure. A caption most lines of a section share is said once. The most common values of a foreign key are no longer failed on under `--strict`: they are the source's parent ids, which a run never inserts
 
 #### 0.2.3
 - NULL and/or fixed values can be injected at tunable rates

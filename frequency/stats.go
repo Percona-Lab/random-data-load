@@ -206,6 +206,11 @@ func (freq *Frequency) claims(value string) bool {
 	return false
 }
 
+// coverTolerance is how far from 1 the values' frequencies may add up and
+// still count as covering every row. pg_stats keeps them as float4, so values
+// that cover a column sum to 1.000000035 as often as to 1.
+const coverTolerance = 1e-6
+
 // mergeNullFraction scales null_frac up before storing it.
 //
 // A row is drawn as NULL first and then overwritten when an index value is
@@ -222,10 +227,15 @@ func (freq *Frequency) mergeNullFraction(cs ColumnStats, table, column string) {
 	for _, f := range freq.IndexFrequencies {
 		indexed += f
 	}
-	if indexed >= 1 {
-		log.Warn().Str("table", table).Str("column", column).Float64("total", indexed).
-			Msg("values already cover every row of this column, its null_frac cannot be reproduced")
+	if indexed >= 1-coverTolerance {
 		freq.Null = 0
+		// Only worth saying when there were nulls to lose. A column whose
+		// values cover every row and that postgres saw no null in is the
+		// common case (booleans, enums), not a problem.
+		if cs.NullFrac > coverTolerance {
+			log.Warn().Str("table", table).Str("column", column).Float64("total", indexed).Float64("nullFrac", cs.NullFrac).
+				Msg("values already cover every row of this column, its null_frac cannot be reproduced")
+		}
 		return
 	}
 

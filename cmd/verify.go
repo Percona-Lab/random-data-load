@@ -43,6 +43,7 @@ type VerifyCmd struct {
 	Tolerance     float64 `name:"tolerance" help:"How far a generated figure may sit from the reported one before it is called out, as a fraction. 0.05 is 5%." default:"0.05"`
 	Analyze       bool    `name:"analyze" negatable:"" help:"Collect statistics before reading the page and row counts back. A table filled a moment ago carries none, so the catalog would report nothing at all." default:"true"`
 	Strict        bool    `name:"strict" help:"Exit non-zero when a figure sits outside --tolerance, so a script can stop on it."`
+	All           bool    `name:"all" help:"Print every figure. By default only the ones outside --tolerance or not measured are, and the rest are counted."`
 }
 
 func (cmd *VerifyCmd) Run() error {
@@ -67,7 +68,7 @@ func (cmd *VerifyCmd) Run() error {
 		return errors.New("no table to read back. Name them with --query or --table, or pass the EXPLAIN that names them")
 	}
 
-	report := &verifyReport{tolerance: cmd.Tolerance}
+	report := &verifyReport{tolerance: cmd.Tolerance, all: cmd.All}
 	for _, target := range targets {
 		cmd.check(target, report)
 	}
@@ -146,6 +147,13 @@ func (cmd *VerifyCmd) targets(plan *explain.Stats, stats []frequency.ColumnStats
 			target.unreadable = err.Error()
 		} else {
 			target.table = table
+			// which columns are keys decides what of a dump a column can be
+			// held against: see the value frequencies in check
+			constraints, err := db.GetConstraints(table.Schema, table.Name)
+			if err != nil {
+				target.skipped = append(target.skipped, fmt.Sprintf("%s: reading its foreign keys: %v. Their values are compared as any other column's", table.Name, err))
+			}
+			table.Constraints = constraints
 		}
 		targets = append(targets, target)
 		byName[strings.ToLower(target.table.Name)] = target
@@ -408,6 +416,7 @@ func (cmd *VerifyCmd) check(target *verifyTarget, report *verifyReport) {
 			}
 		case target.width > 0:
 			width.source = "the plan counts only the columns its scan outputs, the catalog counts every column"
+			width.unlike = true
 		}
 		report.add(width)
 		// Not a comparison against the reported side at all: it holds the
@@ -460,16 +469,33 @@ func (cmd *VerifyCmd) check(target *verifyTarget, report *verifyReport) {
 			generated: float64(nulls) / total,
 			measured:  ok, source: "--stat-file",
 		})
+		key := isForeignKey(target.table, stat.Attname)
 		for i, value := range cmd.commonValues(stat) {
 			matching, ok := measured.Matching[db.Predicate{Column: stat.Attname, Value: value}.Key()]
-			report.add(comparison{
+			c := comparison{
 				subject: name + "." + stat.Attname + " = " + value, figure: figureValueFreq,
 				reported: stat.MostCommonFreqs[i], hasTarget: true,
 				generated: float64(matching) / total,
 				measured:  ok, source: "--stat-file",
-			})
+			}
+			// The values a dump holds for a key are the source database's
+			// parent ids. run never inserts them, it reproduces how skewed
+			// the key is instead, so the share of one given id is not a
+			// figure the generated key was ever aimed at.
+			if key {
+				c.advisory, c.unlike = true, true
+				c.source = "--stat-file: a foreign key holds this run's parent ids, not the source's"
+			}
+			report.add(c)
 		}
 	}
+}
+
+// isForeignKey is whether a column is part of one of the table's foreign keys,
+// matched the way run matches a dump's column to a table's.
+func isForeignKey(table *db.Table, column string) bool {
+	field := table.FieldByName(column)
+	return field != nil && table.IsFieldInAnyConstraints(*field)
 }
 
 func contains(list []string, value string) bool {
