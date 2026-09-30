@@ -46,6 +46,9 @@ type RunCmd struct {
 	TargetBytesPerRow generate.PerTableFloat                  `name:"target-bytes-per-row" help:"Aim a table at an average row width in bytes, the plan's \"width=\": --target-bytes-per-row=\"97;order_items=24\"" default:""`
 	TargetRelpages    generate.PerTableFloat                  `name:"target-relpages" help:"Aim a table at a page count, what a sequential scan is costed from: --target-relpages=\"orders=8045\". Postgres only." default:""`
 
+	SelfFKRoots generate.PerTableFloat `name:"self-fk-roots" placeholder:"F|table=F" help:"Share of a self-referencing table's rows that are roots, with a NULL parent. Defaults to --stat-file's null_frac, else 0.5: --self-fk-roots=\"categories=0.02\""`
+	SelfFKDepth generate.PerTableInt   `name:"self-fk-depth" placeholder:"N|table=N" help:"Levels of a self-referencing table's tree, roots included, each pointing at the one before. Defaults to 2: --self-fk-depth=\"employees=6\""`
+
 	StatFile string `name:"stat-file" help:"Replay a column statistics export: null_frac, most_common_vals, most_common_freqs, and avg_width as a row width. See the \"export-stat\" subcommand." type:"path"`
 
 	// statBytesPerRow is the row width each table's dumped avg_width adds up
@@ -53,6 +56,14 @@ type RunCmd struct {
 	// it alone: it is not a flag, it is what a flag would have had to be given
 	// by hand.
 	statBytesPerRow map[string]int64
+
+	// stats is the --stat-file as it was read, for what it says about a
+	// table as a whole rather than about one column's values.
+	stats []frequency.ColumnStats
+
+	// selfFKPlans holds, for both tables a self-referencing table is split
+	// into, how its rows are spread over the levels of its tree.
+	selfFKPlans map[*db.Table]*selfReferencingPlan
 }
 
 // Run starts inserting data.
@@ -169,15 +180,19 @@ func (cmd *RunCmd) Run() error {
 	// now we have the full table list and every key it will have to satisfy,
 	// we check for any loops. A guessed key can close one just as well as a
 	// key of the schema, so this comes after they are added.
+	cmd.selfFKPlans = map[*db.Table]*selfReferencingPlan{}
 	for _, table := range tables {
 		copiedTable, err := table.IdentifyAndResolveSelfReferencingConstraintLoop()
 		if err != nil {
 			return err
 		}
 		if copiedTable != nil {
-			rows := cmd.Rows.For(table.Name)
-			log.Info().Str("table", table.Name).Int64("rows", rows/2).Msg("table has a self-referencing foreign key. Setting --rows to half for this table since we will insert twice to it to resolve the dependency.")
-			cmd.Rows.Set(table.Name, rows/2)
+			plan, err := cmd.planSelfReferencingLevels(table, copiedTable)
+			if err != nil {
+				return err
+			}
+			cmd.selfFKPlans[table] = plan
+			cmd.selfFKPlans[copiedTable] = plan
 			tables = append([]*db.Table{copiedTable}, tables...)
 
 		} else if table.HasAnyConstraintLoop() {
@@ -491,6 +506,7 @@ func (cmd *RunCmd) mergeStats(tables []*db.Table) error {
 	if err != nil {
 		return err
 	}
+	cmd.stats = stats
 
 	frequency.MergeStats(stats, func(cs frequency.ColumnStats) (frequency.Target, bool) {
 		for _, table := range tables {
@@ -596,13 +612,25 @@ func (cmd *RunCmd) widthsFromStats(stats []frequency.ColumnStats, tables []*db.T
 }
 
 func (cmd *RunCmd) run(table *db.Table) error {
+	if plan, ok := cmd.selfFKPlans[table]; ok {
+		return cmd.runSelfReferencing(table, plan)
+	}
 	rows := cmd.Rows.For(table.Name)
+	return cmd.insert(table, rows, rows, nil, table.Name)
+}
+
+// insert fills a table with rows. tableRows is how many the table is getting
+// in all, which is more than rows for a table filled in several passes, and
+// is what a page count target is spread over. level is set when the pass is
+// one level of a table pointing at itself.
+func (cmd *RunCmd) insert(table *db.Table, rows, tableRows int64, level *generate.SelfReferencingLevel, label string) error {
 	colNullFreqs := frequency.SharedTableFrequency[table.Name]
 	ins := generate.New(table, cmd.ForeignKeyLinks, cmd.WorkersCount, cmd.MaxTextSize, cmd.UUIDVersion, colNullFreqs, &cmd.MinGeneratedTime, &cmd.MaxGeneratedTime)
-	ins.SetTargetBytesPerRow(cmd.rowWidthTarget(table, rows))
+	ins.SetTargetBytesPerRow(cmd.rowWidthTarget(table, tableRows))
+	ins.SetSelfReferencingLevel(level)
 
 	if !cmd.Quiet && !cmd.DryRun {
-		go startProgressBar(table.Name, rows, ins.NotifyChan)
+		go startProgressBar(label, rows, ins.NotifyChan)
 	}
 
 	if cmd.DryRun {

@@ -48,6 +48,7 @@ asking is: which statistic am I trying to move, and which flag moves it?
                            --normal, --pareto, --coin-flip-percent,
                            --normal-stddev, --normal-mean, --pareto-s,
                            --pareto-v
+  how deep a tree goes     --self-fk-roots, --self-fk-depth, --stat-file
   which tables and keys    --query, --table, --add-fk, --no-fk-guess,
                            --fill-fk-parents
   running it again         --truncate
@@ -180,6 +181,40 @@ down. What the right value is depends on the parent's row count, hence:
 to the middle of it. --pareto-s is the slope, above 1, higher decaying faster
 so the first rows run hotter; --pareto-v maps to V in math/rand.Zipf and must
 be at least 1.
+
+
+How deep a tree goes
+--------------------
+
+A table with a foreign key on itself -- employees and their manager, categories
+and their parent -- is inserted as a tree, level by level: the roots first,
+their parent key NULL, then each level pointing at the one before. A recursive
+CTE walks one level per iteration, so the depth is its loop count, and the
+share of roots is the null_frac of the parent key.
+
+--self-fk-roots is the share of the rows that are roots, --self-fk-depth the
+number of levels, roots included. Each level is the one before it times the
+same factor, picked so that the roots get their share and the levels add up
+to --rows:
+
+    --rows=1000 --self-fk-roots=0.1  --self-fk-depth=4   100 166 276 458
+    --rows=1000 --self-fk-roots=0.25 --self-fk-depth=4   250 250 250 250
+    --rows=1000 --self-fk-roots=0.7  --self-fk-depth=3   700 227  73
+
+A share below 1/depth fans out, an org chart; above it the levels peter out,
+a comment thread. The run logs the sizes it picked. Both take the per-table
+form, --self-fk-depth="employees=6;categories=3", and default to half the rows
+as roots over 2 levels. --stat-file sets the share of roots from the null_frac
+of the parent key when --self-fk-roots is not given.
+
+A level draws its parents on a bell curve around the middle of the level
+before it, about 98% of them landing in it and the rest further up the tree,
+so the depth is at most --self-fk-depth and most rows reach it. That needs a
+key the database numbers as rows come in -- auto-increment, serial, identity
+-- for the levels to sit apart once sorted by it; the run warns when it is
+not. Naming the key in --binomial, --sequential, --normal or --pareto, as
+"employees=employees", samples it that way instead, from the rows that were
+there before the level.
 
 
 Which tables and keys

@@ -543,6 +543,49 @@ func TestRun(t *testing.T) {
 			cmds:       [][]string{[]string{"--rows=1000", "--table=t1", "--default-relationship=sequential"}},
 		},
 
+		// A tree of four levels over a tenth of the rows as roots: 100, 166,
+		// 276 and 458 rows. Every row is reached from a root, none is deeper
+		// than the levels asked for, and most of the last level sits exactly
+		// three hops down, the curve only rarely reaching past its level.
+		{
+			name: "fk_self_referencing_depth",
+			checkQuery: `with recursive tree(id, depth) as (
+					select id, 0 from t1 where t1_id is null
+					union all
+					select t1.id, tree.depth + 1 from t1 join tree on t1.t1_id = tree.id
+				)
+				select count(*) = 1000
+					and max(depth) = 3
+					and sum(case when depth = 0 then 1 else 0 end) = 100
+					and sum(case when depth = 3 then 1 else 0 end) > 380
+				from tree;`,
+			engines: []string{"pg", "mysql"},
+			cmds:    [][]string{[]string{"--rows=1000", "--table=t1", "--self-fk-depth=4", "--self-fk-roots=0.1"}},
+		},
+
+		// The roots are the rows with a NULL parent, so the null_frac a dump
+		// holds for the key column is their share on the source.
+		{
+			name:       "fk_self_referencing_stat",
+			checkQuery: "select (count(*) = 1000) and (sum(case when t1_id is null then 1 else 0 end) = 200) from t1;",
+			engines:    []string{"pg"},
+			cmds:       [][]string{[]string{"--rows=1000", "--table=t1", "--stat-file=tests/pg/fk_self_referencing_stat.json"}},
+		},
+
+		// A table pointing at a self-referencing one has to see all of it. It
+		// used to see the roots only, twice over: the copy inserting them
+		// bears the table's name, so the child could be sorted right after
+		// it, and the parent's size was counted once per run, the first time
+		// a key asked for it, which was the self-referencing key itself half
+		// way through.
+		{
+			name:       "fk_self_referencing_child",
+			checkQuery: "select count(distinct t1_id) = 1000 from t2;",
+			inputQuery: "select t2.id from t2 join t1 on t2.t1_id = t1.id",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=1000", "--sequential=t1=t2", "--null-freq=0"}},
+		},
+
 		// A table the query joins to itself has no foreign key saying so, and
 		// the guessed one is a loop of its own: it used to leave the run with
 		// no possible insert order, sorting the tables forever.
