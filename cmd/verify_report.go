@@ -56,6 +56,11 @@ type comparison struct {
 	// advisory marks a line worth printing but not worth failing on, because
 	// the two sides are not quite measuring the same thing.
 	advisory bool
+
+	// unlike marks a line whose two sides are known to measure different
+	// things, so that a difference between them is expected and says nothing
+	// about the data. It is only printed with --all.
+	unlike bool
 }
 
 type verifyReport struct {
@@ -63,6 +68,10 @@ type verifyReport struct {
 	comparisons []comparison
 	notes       []string
 	off         int
+
+	// all prints every line. Without it only the lines that need looking at
+	// are, and the rest are counted.
+	all bool
 }
 
 func (r *verifyReport) add(c comparison) {
@@ -130,16 +139,51 @@ func (c comparison) format(v float64) string {
 	return formatFraction(v)
 }
 
+// needsLooking is whether a line is printed without --all: a figure off its
+// target, or one that could not be read back. A figure within its target, one
+// with no target, and one whose sides measure different things are counted
+// instead.
+func (r *verifyReport) needsLooking(c comparison) bool {
+	switch {
+	case !c.measured:
+		return true
+	case !c.hasTarget, c.unlike:
+		return false
+	}
+	return !c.within(r.tolerance)
+}
+
 // render writes the reported-versus-generated table, figure by figure.
 func (r *verifyReport) render() string {
 	b := &strings.Builder{}
+	var within, noTarget, unlike int
 
 	for _, figure := range figureOrder {
-		lines := r.forFigure(figure)
+		lines := []comparison{}
+		for _, c := range r.forFigure(figure) {
+			switch {
+			case r.all || r.needsLooking(c):
+				lines = append(lines, c)
+			case !c.hasTarget:
+				noTarget++
+			case c.unlike:
+				unlike++
+			default:
+				within++
+			}
+		}
 		if len(lines) == 0 {
 			continue
 		}
-		fmt.Fprintf(b, "%s\n", strings.ToUpper(figure[:1])+figure[1:])
+
+		// A caption every line of the section shares is said once, on the
+		// section, rather than under each of its lines.
+		title := strings.ToUpper(figure[:1]) + figure[1:]
+		shared := sharedDetail(lines)
+		if shared != "" {
+			title += "  (" + shared + ")"
+		}
+		fmt.Fprintf(b, "%s\n", title)
 		for _, c := range lines {
 			reported := "-"
 			if c.hasTarget {
@@ -151,7 +195,7 @@ func (r *verifyReport) render() string {
 			}
 			fmt.Fprintf(b, "  %-44s reported %12s   generated %12s %8s   %s\n",
 				truncate(c.subject, 44), reported, generated, c.delta(), c.verdict(r.tolerance))
-			if detail := c.detail(); detail != "" {
+			if detail := c.detail(); detail != "" && detail != shared {
 				fmt.Fprintf(b, "  %-44s   %s\n", "", detail)
 			}
 		}
@@ -160,6 +204,10 @@ func (r *verifyReport) render() string {
 
 	if len(r.comparisons) == 0 {
 		fmt.Fprintln(b, "Nothing could be read back.")
+	}
+	if hidden := r.hidden(within, noTarget, unlike); hidden != "" {
+		fmt.Fprintln(b, hidden)
+		fmt.Fprintln(b)
 	}
 
 	if len(r.notes) > 0 {
@@ -197,6 +245,48 @@ func (c comparison) detail() string {
 		parts = append(parts, c.note)
 	}
 	return strings.Join(parts, "; ")
+}
+
+// hidden is the line saying what was left out without --all, so that a short
+// report still says how much it checked.
+func (r *verifyReport) hidden(within, noTarget, unlike int) string {
+	parts := []string{}
+	if within > 0 {
+		parts = append(parts, fmt.Sprintf("%d within %s of their target", within, formatFraction(r.tolerance)))
+	}
+	if noTarget > 0 {
+		parts = append(parts, fmt.Sprintf("%d with no target", noTarget))
+	}
+	if unlike > 0 {
+		parts = append(parts, fmt.Sprintf("%d whose two sides measure different things", unlike))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "Not shown: " + strings.Join(parts, ", ") + ". --all prints every figure."
+}
+
+// sharedDetail is the detail said once on the section: the one most of its
+// lines carry, when every line carries one. A line carrying another still
+// says its own. When some line carries none, nothing goes on the section,
+// which would otherwise read as if that line carried it too.
+func sharedDetail(lines []comparison) string {
+	count := map[string]int{}
+	shared := ""
+	for _, c := range lines {
+		detail := c.detail()
+		if detail == "" {
+			return ""
+		}
+		count[detail]++
+		if count[detail] > count[shared] || (count[detail] == count[shared] && detail < shared) {
+			shared = detail
+		}
+	}
+	if count[shared] < 2 && len(lines) > 1 {
+		return ""
+	}
+	return shared
 }
 
 func (r *verifyReport) forFigure(figure string) []comparison {
