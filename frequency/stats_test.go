@@ -1,12 +1,14 @@
 package frequency
 
 import (
+	"bytes"
 	"math"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 func TestMain(m *testing.M) {
@@ -165,6 +167,24 @@ func TestMergeStats(t *testing.T) {
 			wantNull:  0,
 		},
 		{
+			// float4 in pg_stats: a boolean postgres saw on every row sums to
+			// a hair over 1, and that is still every row
+			name:      "values summing a hair over 1 cover every row",
+			stats:     []ColumnStats{{Tablename: "t1", Attname: "c1", MostCommonVals: []string{"f", "t"}, MostCommonFreqs: []float64{0.920000035, 0.08}}},
+			wantVals:  []string{"f", "t"},
+			wantFreqs: []float64{0.920000035, 0.08},
+			wantNull:  0,
+		},
+		{
+			// 1-indexed is zero here, which is the division null_frac must
+			// never reach
+			name:      "values summing to exactly 1 leave no null and no NaN",
+			stats:     []ColumnStats{{Tablename: "t1", Attname: "c1", MostCommonVals: []string{"f", "t"}, MostCommonFreqs: []float64{0.9202, 0.0798}}},
+			wantVals:  []string{"f", "t"},
+			wantFreqs: []float64{0.9202, 0.0798},
+			wantNull:  0,
+		},
+		{
 			// --query-param-freq stacks its literal on top of the dump, so the
 			// share left for the nulls can end up smaller than null_frac asks
 			// for. They then take everything that is left, and no more.
@@ -215,6 +235,60 @@ func TestMergeStats(t *testing.T) {
 			}
 			if math.Abs(got.Null-test.wantNull) > 1e-9 {
 				t.Errorf("null = %v, want %v", got.Null, test.wantNull)
+			}
+		})
+	}
+}
+
+// A case-2 dump had 11 columns whose values sum to 1.000000035 and that hold
+// no null, and every one of them warned that its null_frac could not be
+// reproduced. There was no null to reproduce. The warning is for a column
+// that loses nulls, and only for that.
+func TestNullFractionWarnsOnlyWhenNullsAreLost(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing ColumnFrequency
+		stats    ColumnStats
+		warn     bool
+	}{
+		{
+			name:  "rounding over 1, no null in the dump",
+			stats: ColumnStats{Tablename: "t1", Attname: "c1", MostCommonVals: []string{"a", "b"}, MostCommonFreqs: []float64{0.5, 0.500000035}},
+		},
+		{
+			name:  "exactly 1, no null in the dump",
+			stats: ColumnStats{Tablename: "t1", Attname: "c1", MostCommonVals: []string{"f", "t"}, MostCommonFreqs: []float64{0.9202, 0.0798}},
+		},
+		{
+			name:     "values covering every row, and nulls the dump measured",
+			existing: ColumnFrequency{"c1": {IndexValues: []string{"a"}, IndexFrequencies: []float64{1}}},
+			stats:    ColumnStats{Tablename: "t1", Attname: "c1", NullFrac: 0.5},
+			warn:     true,
+		},
+		{
+			name:  "room left for the nulls",
+			stats: ColumnStats{Tablename: "t1", Attname: "c1", NullFrac: 0.1, MostCommonVals: []string{"a"}, MostCommonFreqs: []float64{0.6}},
+		},
+	}
+
+	level, logger := zerolog.GlobalLevel(), log.Logger
+	defer func() { zerolog.SetGlobalLevel(level); log.Logger = logger }()
+	zerolog.SetGlobalLevel(zerolog.WarnLevel)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var out bytes.Buffer
+			log.Logger = zerolog.New(&out)
+			SharedTableFrequency = map[string]ColumnFrequency{}
+			if test.existing != nil {
+				SharedTableFrequency["t1"] = test.existing
+			}
+
+			MergeStats([]ColumnStats{test.stats}, sameTable)
+
+			warned := strings.Contains(out.String(), "null_frac cannot be reproduced")
+			if warned != test.warn {
+				t.Errorf("warned = %v, want %v (log: %q)", warned, test.warn, out.String())
 			}
 		})
 	}
