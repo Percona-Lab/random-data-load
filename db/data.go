@@ -23,6 +23,10 @@ type Table struct {
 	// key included. Filling two of those columns from two different parents
 	// has to respect the whole key, not each column on its own.
 	UniqueKeys [][]string
+
+	// holdsRootsOf is set on the copy a self-referencing table is split into,
+	// the one inserting the rows pointing at nothing.
+	holdsRootsOf bool
 }
 
 type Field struct {
@@ -335,7 +339,14 @@ func (t *Table) AreAllDependenciesContained(tables []*Table) bool {
 			continue
 		}
 		if !slices.ContainsFunc(tables, func(t2 *Table) bool {
-			return strings.ToLower(t2.Name) == strings.ToLower(constraint.ReferencedTableName)
+			if !strings.EqualFold(t2.Name, constraint.ReferencedTableName) {
+				return false
+			}
+			// The copy holding a self-referencing table's roots bears its
+			// name, but it only stands for it to the table itself. Anything
+			// else pointing at the table waits for every level of it, or it
+			// only ever gets to see the roots.
+			return !t2.holdsRootsOf || constraint.IsSelfReferencing()
 		}) {
 			return false
 		}
@@ -378,6 +389,7 @@ func (t *Table) IdentifyAndResolveSelfReferencingConstraintLoop() (*Table, error
 	}
 
 	copiedTable := *t
+	copiedTable.holdsRootsOf = true
 
 	columns := selfReferencing.ColumnsName()
 	copiedTable.Fields = slices.Clone(t.Fields)
