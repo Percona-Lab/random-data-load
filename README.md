@@ -137,6 +137,8 @@ Foreign key sampling options:
 |--pareto|Defines a 1-N foreign key relationships using zipf (pareto) distribution. Slow method needing full table scans for each samples|
 |--pareto-s|Zipf slope parameter. Must be above 1. Higher value will mean faster decay, so first rows will be hotter|
 |--pareto-v|Must be >=1. Directly map to V, https://pkg.go.dev/math/rand#Zipf.|
+|--self-fk-roots|Share of a self-referencing table's rows that are roots, their parent key NULL. One number for every table, or per table: `--self-fk-roots="categories=0.02"`. Defaults to the `null_frac` of the parent key in `--stat-file`, else 0.5|
+|--self-fk-depth|Levels of a self-referencing table's tree, roots included, each pointing at the one before. One number for every table, or per table: `--self-fk-depth="employees=6"` (Default: 2)|
 
 ### Example
 
@@ -332,6 +334,21 @@ First rows will be hotter and sampled far more commonly, but it will nonetheless
 **3.2** Normal
 "normal" is actually implemented using box-muller transformation (reproducing "normal" distribution from 2 uniformly random float numbers between 0.0 and 1.0)
 It will mostly sample around the --normal-mean based on --normal-stddev, and very few rows on the outlier parts.
+
+### Tables pointing at themselves
+
+A table with a foreign key on itself, such as `employees.manager_id` or `categories.parent_id`, is inserted as a tree, one level at a time. The roots go in first with their parent key NULL, and then each level points at the level before it. `--self-fk-roots` is the share of rows that are roots, and `--self-fk-depth` is the number of levels, roots included. Each level is the one before it times the same factor, picked so that the roots get their share and the levels add up to `--rows`:
+
+| --rows | --self-fk-roots | --self-fk-depth | levels |
+|---|---|---|---|
+| 1000 | 0.5 (default) | 2 (default) | 500, 500 |
+| 1000 | 0.1 | 4 | 100, 166, 276, 458 |
+| 1000 | 0.25 | 4 | 250, 250, 250, 250 |
+| 1000 | 0.7 | 3 | 700, 227, 73 |
+
+A share below 1/depth fans out like an org chart, and a share above it thins out like a comment thread. The run logs the sizes it picked. A `--stat-file` covering the parent key sets the share of roots from its `null_frac` when `--self-fk-roots` is not given, because a root is the only row whose parent key is NULL.
+
+A level samples its parents by coin flip, as `--binomial` does, from the level before it only. Every row therefore sits exactly as deep as the level it was inserted at, and a recursive CTE walks exactly `--self-fk-depth` levels. `--coin-flip-percent` applies as it does to any parent. The level is selected by a range on its key, recorded as the largest key before each level starts, so no sample has to number the table's rows. This needs a key the database numbers as rows come in (auto-increment, serial, identity). Without one, a level can point at any row already in the table, its own included, and the run warns. Naming the key in `--binomial`, `--sequential`, `--normal` or `--pareto`, for example `--sequential="employees=employees"`, samples it with that sampler instead. A table pointing at a self-referencing one is inserted after every level of it.
 
 ## Guessing implicit foreign keys from queries
 If no foreign keys are explicitely defined in the schema, but the query requires columns to match, `random-data-load` will infer the foreign keys and insert valid values so that the query returns rows.
@@ -750,6 +767,9 @@ Without clear plan:
 - `verify --stat-file` holds the generated row width against that same sum, and fails on it under `--strict` rather than only printing it, since the export and the catalog are the same addition over the same columns. A partial export still gives no target, and the report names the columns it is missing
 - a row width target now accounts for how often each filled column is NULL, instead of falling short of the target by that column's null fraction: a column NULL on a third of its rows is filled to what it has to hold on the other two thirds
 - `verify` prints only the figures outside `--tolerance` and the ones it could not read back, and counts the rest; `--all` prints every figure. A caption most lines of a section share is said once. The most common values of a foreign key are no longer failed on under `--strict`: they are the source's parent ids, which a run never inserts
+- a self-referencing table is inserted as a tree of `--self-fk-depth` levels, with `--self-fk-roots` of its rows as roots, instead of always being split in two halves. Each level samples its parents by coin flip from the level before it only, so the depth is exact, and `--stat-file` sets the share of roots from the parent key's `null_frac`
+- a table pointing at a self-referencing one sees all of its rows. It used to see only the half inserted first, because it could be sorted between the two halves and the parent's row count was taken half way through
+- `--target-relpages` on a self-referencing table spreads the table's whole `--rows` over the pages, where each half used to be aimed at all of them
 
 #### 0.2.3
 - NULL and/or fixed values can be injected at tunable rates

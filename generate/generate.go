@@ -31,6 +31,7 @@ type Insert struct {
 	maxGeneratedTime *time.Time
 	widthTarget      *rowWidthTarget
 	rowsWanted       int64
+	selfLevel        *SelfReferencingLevel
 }
 
 type ForeignKeyLinks struct {
@@ -61,19 +62,28 @@ var fkLinkToSamplerCreator = map[string]SamplerBuilder{
 }
 
 func (r ForeignKeyLinks) relationship(parent, child string) SamplerBuilder {
-	if r.Sequential[parent] == child {
-		return fkLinkToSamplerCreator[SequentialFlag]
-	}
-	if r.Binomial[parent] == child {
-		return fkLinkToSamplerCreator[BinomialFlag]
-	}
-	if r.Normal[parent] == child {
-		return fkLinkToSamplerCreator[NormalFlag]
-	}
-	if r.Pareto[parent] == child {
-		return fkLinkToSamplerCreator[ParetoFlag]
+	if named, ok := r.namedRelationship(parent, child); ok {
+		return named
 	}
 	return fkLinkToSamplerCreator[r.DefaultRelationship]
+}
+
+// namedRelationship returns the sampler this relationship was given by name,
+// if --binomial, --sequential, --normal or --pareto named it.
+func (r ForeignKeyLinks) namedRelationship(parent, child string) (SamplerBuilder, bool) {
+	if r.Sequential[parent] == child {
+		return fkLinkToSamplerCreator[SequentialFlag], true
+	}
+	if r.Binomial[parent] == child {
+		return fkLinkToSamplerCreator[BinomialFlag], true
+	}
+	if r.Normal[parent] == child {
+		return fkLinkToSamplerCreator[NormalFlag], true
+	}
+	if r.Pareto[parent] == child {
+		return fkLinkToSamplerCreator[ParetoFlag], true
+	}
+	return nil, false
 }
 
 var (
@@ -478,13 +488,25 @@ func (in *Insert) sampleConstraints(constraints db.Constraints, values [][]Gette
 		// zipf laws may draw. Measured on --rows, the size of the table being
 		// filled, all three were wrong for any parent of a different size,
 		// which a dimension table always is.
-		parentSize, err := parentRowCount(constraint.ReferencedTableSchema, constraint.ReferencedTableName)
-		if err != nil {
-			return err
-		}
+		//
+		// A key the table has on itself is the exception: its parent is
+		// still being filled, level by level, so its size is where the level
+		// before this one ends, and it is not counted once for the whole run.
+		var sampler Sampler
+		var parentSize int64
+		if constraint.IsSelfReferencing() && in.selfLevel != nil {
+			parentSize = in.selfLevel.PreviousEnd
+			sampler = in.selfReferencingSampler(constraint, subSlices[constraint])
+		} else {
+			var err error
+			parentSize, err = parentRowCount(constraint.ReferencedTableSchema, constraint.ReferencedTableName)
+			if err != nil {
+				return err
+			}
 
-		samplerInit := in.fklinks.relationship(constraint.ReferencedTableName, in.table.Name)
-		sampler := samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlices[constraint], parentSize, &in.fklinks)
+			samplerInit := in.fklinks.relationship(constraint.ReferencedTableName, in.table.Name)
+			sampler = samplerInit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, subSlices[constraint], parentSize, &in.fklinks)
+		}
 
 		// An imported dump may say how skewed this key was, which no sampler
 		// knows about: it is a property of the relationship rather than of the

@@ -70,6 +70,9 @@ func main() {
 		// filled rather than a parent being sampled
 		kong.ValueMapper(&cli.Run.TargetBytesPerRow, &generate.PerTableFloat{}),
 		kong.ValueMapper(&cli.Run.TargetRelpages, &generate.PerTableFloat{}),
+		// as does the shape of a table's tree when it points at itself
+		kong.ValueMapper(&cli.Run.SelfFKRoots, &generate.PerTableFloat{}),
+		kong.ValueMapper(&cli.Run.SelfFKDepth, &generate.PerTableInt{}),
 		kong.Vars{
 			"version":        buildInfo,
 			"SequentialFlag": generate.SequentialFlag,

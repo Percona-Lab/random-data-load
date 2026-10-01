@@ -177,6 +177,17 @@ func CountRows(schema, table string) (int64, error) {
 	return count, nil
 }
 
+// MaxInt reads the largest value of an integer column, and false when the
+// table holds none. It is an index lookup on a key, where a count is a scan.
+func MaxInt(schema, table, column string) (int64, bool, error) {
+	query := fmt.Sprintf("SELECT max(%s) FROM %s.%s", Escape(column), Escape(schema), Escape(table))
+	var largest sql.NullInt64
+	if err := DB.QueryRow(query).Scan(&largest); err != nil {
+		return 0, false, errors.Wrapf(err, "cannot read the largest %s of %s.%s", column, schema, table)
+	}
+	return largest.Int64, largest.Valid, nil
+}
+
 // RowNumberedSubquery wraps a table so its rows can be asked for by position.
 //
 // Both engines have window functions, so both get the same subquery. The

@@ -20,6 +20,37 @@ func tableWithConstraintsTo(name string, referenced ...*Table) *Table {
 }
 
 func TestSortTables(t *testing.T) {
+	// The copy inserting a self-referencing table's roots bears its name, and
+	// a table pointing at it was placed right after the copy half of the time,
+	// before the rest of the tree was inserted.
+	t.Run("a child of a self-referencing table waits for all of it", func(t *testing.T) {
+		t1 := &Table{Schema: "test", Name: "t1", Fields: []Field{{ColumnName: "t1_id", IsNullable: true}}}
+		t1.Constraints = []*Constraint{{
+			ConstraintName: "t1_t1", TableName: "t1", ColumnsName: []string{"t1_id"},
+			Fields:                []Field{{ColumnName: "t1_id", IsNullable: true}},
+			ReferencedTableSchema: "test", ReferencedTableName: "t1", ReferencedTable: t1,
+		}}
+		roots, err := t1.IdentifyAndResolveSelfReferencingConstraintLoop()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t2 := tableWithConstraintsTo("t2", t1)
+		for _, table := range []*Table{roots, t1, t2} {
+			table.FlagConstraintThatArePartsOfThisRun([]*Table{roots, t1, t2})
+		}
+
+		// the order the tables come in decided it, so try both
+		for _, given := range [][]*Table{{roots, t2, t1}, {t2, t1, roots}} {
+			sorted, err := SortTables(given)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sorted[0] != roots || sorted[1] != t1 || sorted[2] != t2 {
+				t.Fatalf("expected the roots, then t1, then t2, got %s, %s, %s", sorted[0].Name, sorted[1].Name, sorted[2].Name)
+			}
+		}
+	})
+
 	t.Run("orders dependencies first", func(t *testing.T) {
 		t1 := tableWithConstraintsTo("t1")
 		t2 := tableWithConstraintsTo("t2", t1)

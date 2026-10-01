@@ -1,0 +1,4 @@
+CREATE TABLE t1(
+	id bigint generated always as identity primary key,
+	t1_id bigint references t1(id)
+);
