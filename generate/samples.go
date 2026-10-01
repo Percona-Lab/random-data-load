@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/Percona-Lab/random-data-load/db"
 	"github.com/pkg/errors"
@@ -376,46 +376,47 @@ type BoxMullerSample struct {
 	mean   float64
 }
 
-// box muller
-// currently has a "distribution" bug I cannot figure out, there's a spike of probability around what should have been the 25 quartile
-// maybe it's tied to the fact boxmuller expects [0.0,1.0] for u1 u2, but golang can only provide [0.0,1.0[
-// stddev/mean does not affect it, it does not look like a float related issues but it most probably is
+// Sample draws a parent row for every row of the bulk on a bell curve, by
+// box-muller, and gives each row exactly the parent it drew.
+//
+// The draws used to go into a WHERE rownumber IN (...) list, as the zipf law's
+// did, and the bulk was filled by reading that list again until it was full:
+// every parent drawn at least once got the same share of the bulk, so the
+// curve was flattened towards a plateau over the rows it reached.
 func (s *BoxMullerSample) Sample() error {
+	size, err := s.usableRows()
+	if err != nil {
+		return err
+	}
 
-	rowNumbers := make([]string, s.limit)
-	for i := range rowNumbers {
+	targets := make([]int, len(s.values))
+	offsets := make([]int64, len(s.values))
+	for row := range s.values {
 		// The law reaches past both ends of the table, so a row number
 		// landing outside it is drawn again. Each attempt needs a new pair of
 		// uniforms: testing the same one again can only give the same row
-		// number back, and did so forever.
-		var cosId int64 = -1
-		for attempt := 0; cosId < 0 || cosId > s.tableSize; attempt++ {
+		// number back, and did so forever. Row numbers count from 1: a 0
+		// used to be accepted, and matched no row.
+		var rowNumber int64 = -1
+		for attempt := 0; rowNumber < 1 || rowNumber > size; attempt++ {
 			if attempt == maxNormalDraws {
 				// A mean sitting far outside the table, as --normal-mean set
 				// by hand leaves it, would be redrawn for a very long time.
 				// The nearest row it can reach stays closer to what was asked
 				// than looping does.
-				cosId = min(max(int64(math.Round(s.mean)), 0), s.tableSize)
-				log.Debug().Float64("mean", s.mean).Float64("stddev", s.stddev).Int64("tableSize", s.tableSize).Int64("rowNumber", cosId).Str("tablename", s.table).Msg("the normal law falls outside the table, sampling its closest row")
+				rowNumber = min(max(int64(math.Round(s.mean)), 1), size)
+				log.Debug().Float64("mean", s.mean).Float64("stddev", s.stddev).Int64("tableSize", size).Int64("rowNumber", rowNumber).Str("tablename", s.table).Msg("the normal law falls outside the table, sampling its closest row")
 				break
 			}
-			x1, x2 := rand.Float64(), rand.Float64()
-			cosId = int64(math.Round(s.mean + s.stddev*math.Sqrt(-2*math.Log(x1))*math.Cos(2*math.Pi*x2)))
+			// box-muller takes its first uniform in (0, 1]: at 0 the
+			// logarithm is infinite
+			x1, x2 := 1-rand.Float64(), rand.Float64()
+			rowNumber = int64(math.Round(s.mean + s.stddev*math.Sqrt(-2*math.Log(x1))*math.Cos(2*math.Pi*x2)))
 		}
-		rowNumbers[i] = strconv.FormatInt(cosId, 10)
+		targets[row] = row
+		offsets[row] = rowNumber - 1
 	}
-
-	escapedFields := db.EscapedNamesListFromFields(s.fields)
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s IN (%s) AND %s LIMIT %d",
-		escapedFields,
-		db.FilterOnRowNumberFromClause(s.fields, s.table, s.schema),
-		db.FilterOnRowNumberVarClause(),
-		strings.Join(rowNumbers, ","),
-		db.EscapedFieldsIsNotNull(s.fields),
-		s.limit,
-	)
-
-	return s.query(query, s.values)
+	return s.fillFromRowNumbers(targets, offsets)
 }
 
 func NewBoxMullerSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, tableSize int64, fkCli *ForeignKeyLinks) Sampler {
@@ -445,32 +446,62 @@ func NewBoxMullerSample(fields []db.Field, schema, tablename, constraintName str
 
 type ZipfSample struct {
 	sampleCommon
-	zipfRand *rand.Zipf
 }
 
+// Sample draws a parent row for every row of the bulk on a zipf law, and gives
+// each row exactly the parent it drew.
+//
+// The draws used to go into a WHERE rownumber IN (...) list, which returns a
+// row once however many times it was drawn, and the bulk was then filled by
+// reading that list again until it was full. Every parent drawn at least once
+// got the same share of the bulk, so the head of the law was flattened by an
+// amount --bulk-size decided: over 20,000 parents, the hottest of a million
+// children came out at 19,987 rows with a bulk of 100, 3,000 with 1000 and
+// 464 with 10000, where the law puts about 79,000.
 func (s *ZipfSample) Sample() error {
-
-	rowNumbers := make([]string, s.limit)
-	for i := range rowNumbers {
-		rowNumbers[i] = strconv.Itoa(int(s.zipfRand.Uint64()))
+	size, err := s.usableRows()
+	if err != nil {
+		return err
 	}
-	escapedFields := db.EscapedNamesListFromFields(s.fields)
-	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s IN (%s) AND %s LIMIT %d",
-		escapedFields,
-		db.FilterOnRowNumberFromClause(s.fields, s.table, s.schema),
-		db.FilterOnRowNumberVarClause(),
-		strings.Join(rowNumbers, ","),
-		db.EscapedFieldsIsNotNull(s.fields),
-		s.limit,
-	)
+	// A seed per sampler from the shared source: one is built for every bulk,
+	// and two workers seeding from the clock in the same nanosecond drew the
+	// same parents.
+	source := rand.New(rand.NewSource(rand.Int63()))
+	// The law draws from 0, its hottest value, and an offset counts from 0 too.
+	// Drawn as row numbers, which count from 1, the hottest value matched no
+	// row and its share of the draws was lost.
+	zipf := rand.NewZipf(source, s.fkCli.ParetoS.For(s.table), s.fkCli.ParetoV.For(s.table), uint64(size-1))
 
-	return s.query(query, s.values)
+	targets := make([]int, len(s.values))
+	offsets := make([]int64, len(s.values))
+	for row := range s.values {
+		targets[row] = row
+		offsets[row] = int64(zipf.Uint64())
+	}
+	return s.fillFromRowNumbers(targets, offsets)
+}
+
+// usableRows is how many parent rows a law draws from: the ones holding no
+// NULL in the key, since only those are numbered. A key with no nullable
+// column holds none, so the size the sampler was given stands, which is also
+// the only right one for a table pointing at itself, still being filled.
+func (s *sampleCommon) usableRows() (int64, error) {
+	if !slices.ContainsFunc(s.fields, func(f db.Field) bool { return f.IsNullable }) {
+		return s.tableSize, nil
+	}
+	count, err := parentUsableRowCount(s.schema, s.table, s.fields)
+	if err != nil {
+		return 0, err
+	}
+	if count == 0 {
+		return 0, errors.Errorf("every row of %s.%s holds a NULL in %s, so there is nothing for the key to point at",
+			s.schema, s.table, db.EscapedNamesListFromFields(s.fields))
+	}
+	return count, nil
 }
 
 func NewZipfSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, tableSize int64, fkCli *ForeignKeyLinks) Sampler {
 	s := &ZipfSample{}
 	s.Init(fields, schema, tablename, constraintName, values, tableSize, fkCli)
-	s.zipfRand = rand.NewZipf(rand.New(rand.NewSource(time.Now().UnixNano())), fkCli.ParetoS.For(tablename), fkCli.ParetoV.For(tablename), uint64(tableSize))
-
 	return s
 }

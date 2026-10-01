@@ -93,6 +93,17 @@ func TestDeriveThroughCTEAndSubquery(t *testing.T) {
 	assertDistinct(t, stats, "suppliers", "country", 8)
 }
 
+// The anchor of a recursive CTE scans with a "parent_id IS NULL" filter, which
+// postgres costs at nothing. categories holds 300 rows on 2 pages, and taking
+// an operator per row off its cost of 5.00 left 1.
+func TestDerivePagesBehindNullTest(t *testing.T) {
+	stats := load(t, "recursive_cte.txt").Derive(nil)
+
+	assertTable(t, stats, "categories", 300, 2)
+	assertTable(t, stats, "products", 20000, 187)
+	assertTable(t, stats, "order_items", 1000000, 5406)
+}
+
 // Without the reported sizes a table reached only through an index has none,
 // and the report has to say so rather than invent one.
 func TestDeriveWithoutGivenSizes(t *testing.T) {

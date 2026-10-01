@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/pkg/errors"
@@ -256,12 +257,61 @@ func (_ MySQL) ErrShouldRetryTx(err error) bool {
 	return strings.Contains(err.Error(), "Duplicate entry")
 }
 
-func (_ MySQL) FilterOnRowNumberFromClause(_ []Field, table, schema string) string {
-	return fmt.Sprintf("%s.%s, (SELECT @rownumber := 0) f", Escape(schema), Escape(table))
+// RowNumberedSubquery numbers the rows with ROW_NUMBER() where the server has
+// window functions, and with a user variable where it does not: MySQL before
+// 8.0 and MariaDB before 10.2.
+//
+// The variable is assigned once per row, inside a derived table, and the
+// outer query compares the column it produced. Read and compared in the same
+// expression instead, it is incremented again for the comparison. A derived
+// table assigning a user variable is never merged into the query around it,
+// so it is numbered exactly once. Its order is the order the rows are read
+// in, the clustered index for an InnoDB table, which stays put for a parent
+// that is no longer being written to: the same position is the same row in
+// every bulk.
+func (_ MySQL) RowNumberedSubquery(fields []Field, schema, table string) string {
+	if mysqlHasWindowFunctions() {
+		return windowRowNumberedSubquery(fields, schema, table)
+	}
+	return fmt.Sprintf("(SELECT %s, @rownumber := @rownumber + 1 AS rownumber FROM %s.%s, (SELECT @rownumber := 0) init WHERE %s) f",
+		EscapedNamesListFromFields(fields), Escape(schema), Escape(table), EscapedFieldsIsNotNull(fields))
 }
 
-func (_ MySQL) FilterOnRowNumberVarClause() string {
-	return "(@rownumber := @rownumber + 1)"
+var (
+	windowFunctionsOnce sync.Once
+	windowFunctions     bool
+)
+
+// mysqlHasWindowFunctions asks the server once. When it cannot be asked, the
+// user variable stands, since every version runs it.
+func mysqlHasWindowFunctions() bool {
+	windowFunctionsOnce.Do(func() {
+		var version string
+		if err := DB.QueryRow("SELECT VERSION()").Scan(&version); err != nil {
+			log.Debug().Err(err).Msg("could not read the server version, numbering rows with a user variable")
+			return
+		}
+		windowFunctions = versionHasWindowFunctions(version)
+		log.Debug().Str("version", version).Bool("windowFunctions", windowFunctions).Msg("read the server version")
+	})
+	return windowFunctions
+}
+
+// versionHasWindowFunctions reads a VERSION() string: "5.7.44", "8.0.36",
+// "10.6.12-MariaDB", or with the "5.5.5-" MariaDB puts first for old clients.
+func versionHasWindowFunctions(version string) bool {
+	mariadb := strings.Contains(strings.ToLower(version), "mariadb")
+	if mariadb {
+		version = strings.TrimPrefix(version, "5.5.5-")
+	}
+	var major, minor int
+	if _, err := fmt.Sscanf(version, "%d.%d", &major, &minor); err != nil {
+		return false
+	}
+	if mariadb {
+		return major > 10 || (major == 10 && minor >= 2)
+	}
+	return major >= 8
 }
 
 // ValueTimeLayout leaves the offset out: DATETIME holds no time zone, and only
