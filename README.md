@@ -227,6 +227,8 @@ Telling the levels apart needs a key the database numbers itself (auto-increment
 If no foreign keys are explicitely defined in the schema, but the query requires columns to match, `random-data-load` will infer the foreign keys and insert valid values so that the query returns rows.
 Can be disabled with --no-fk-guess
 
+The guesses still apply when `--table` restricts the run to one table: it samples the rows its parents already hold, so the tables of a query can be filled one at a time, with different flags for each. The parent is the side of the join holding a primary or unique key, whether or not that table is in the run. When neither side holds one, the first table the condition names is the parent; write it that way round, or use `--add-fk`.
+
 An estimation can be made using:
 ```
 random-data-load query --query="$(cat huge_select.sql)"

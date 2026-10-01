@@ -190,20 +190,39 @@ func (c *Constraint) pairs(childColumn, parentColumn string) bool {
 }
 
 // isKeySide reports whether these columns are a primary or unique key of their
-// table, the side a foreign key has to point at. It reports nothing for a
-// table this run did not load, and for a catalog that does not say which
-// columns are keys.
+// table, the side a foreign key has to point at. A table outside this run is
+// read from the catalog: with --table, the parent of a guessed key often sits
+// outside it, and which way round the join goes still depends on it.
 func isKeySide(tables []*Table, part query.VirtualJoinPart) bool {
-	if len(part.Columns) == 0 {
+	if len(part.Columns) == 0 || len(tables) == 0 {
 		return false
 	}
-	tableIdx := slices.IndexFunc(tables, func(t *Table) bool { return strings.EqualFold(t.Name, part.Table) })
-	if tableIdx == -1 {
-		return false
+	var table *Table
+	if tableIdx := slices.IndexFunc(tables, func(t *Table) bool { return strings.EqualFold(t.Name, part.Table) }); tableIdx != -1 {
+		table = tables[tableIdx]
+	} else {
+		// the same schema the constraint will load the parent from
+		loaded, err := LoadTable(tables[0].Schema, part.Table)
+		if err != nil {
+			log.Debug().Err(err).Str("table", part.Table).Str("func", "isKeySide").Msg("could not read a table outside this run")
+			return false
+		}
+		table = loaded
+	}
+
+	// Columns covering a whole unique key are unique too. This is the only
+	// way to see a composite primary key on postgres, whose catalog marks a
+	// column as PRI for being an identity rather than for being a key.
+	for _, key := range table.UniqueKeys {
+		if len(key) > 0 && !slices.ContainsFunc(key, func(keyColumn string) bool {
+			return !slices.ContainsFunc(part.Columns, func(c string) bool { return strings.EqualFold(c, keyColumn) })
+		}) {
+			return true
+		}
 	}
 
 	for _, column := range part.Columns {
-		field := tables[tableIdx].FieldByName(column)
+		field := table.FieldByName(column)
 		if field == nil || (field.ColumnKey != "PRI" && field.ColumnKey != "UNI") {
 			return false
 		}

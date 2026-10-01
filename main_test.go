@@ -609,6 +609,18 @@ func TestRun(t *testing.T) {
 			cmds:       [][]string{[]string{"--rows=100", "--default-relationship=sequential"}},
 		},
 
+		// The same join, filled one table at a time. With --table=t2, t1 is
+		// not part of the run, so whether its id is a key used to be unknown:
+		// the guess stayed as written, landed on t1, and was dropped, leaving
+		// t2.t1_id random. With --table=t1, the key side, nothing is added.
+		{
+			name:       "fk_virtual_join_written_backwards_table_per_table",
+			checkQuery: "select ((select count(*) from t1) = 100) and (max(t1.id) <= 100) and (count(*) = 100) from t2 join t1 on t2.t1_id = t1.id;",
+			inputQuery: "select t2.id from t2 join t1 on t2.t1_id = t1.id;",
+			engines:    []string{"pg", "mysql"},
+			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=sequential", "--null-freq=0"}},
+		},
+
 		// The side a join names first means nothing, so the guess has to be
 		// read the other way round when it would close a loop with a key the
 		// schema already has. Read as written, t1 and t2 waited on each other
