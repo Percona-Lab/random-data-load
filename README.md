@@ -11,86 +11,139 @@ Based on the table(s) schema and a query, it will generate random data with resp
 
 
 ### Example
-Using the following schema,
-```
-CREATE TABLE public.orders (
-    order_id integer primary key generated always as identity,
-    shipping_address text NOT NULL,
-    country text,
-    zip text NOT NULL,
-    currency character varying(3) NOT NULL,
-    email character varying(100) NOT NULL
+
+A query is reported slow. It walks a category tree with a recursive CTE and sums revenue per top-level category. We have its schema and its `EXPLAIN ANALYZE` (`plan.txt`), but not its data.
+
+```sql
+CREATE TABLE categories (
+    id        int PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    parent_id int REFERENCES categories (id),          -- points at itself
+    name      text NOT NULL
 );
-
-CREATE TABLE public.products (
-    id varchar(30) primary key,
-    product text NOT NULL,
-    price numeric NOT NULL,
-    material text,
-    feature text,
-    company text
+CREATE TABLE products (
+    id          int PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    category_id int NOT NULL REFERENCES categories (id),
+    name        text NOT NULL,
+    price       numeric(10,2) NOT NULL
 );
-
-CREATE TABLE public.order_items (
-    product_no varchar(30) NOT NULL,
-    order_id integer NOT NULL
+CREATE TABLE order_items (
+    order_id   bigint NOT NULL,
+    product_id int NOT NULL,                           -- no foreign key declared
+    quantity   int NOT NULL
 );
+CREATE INDEX ON order_items (product_id);
 ```
 
-To debug the following query:
+```sql
+-- query.sql
+WITH RECURSIVE tree AS (
+    SELECT id, id AS root_id FROM categories WHERE parent_id IS NULL
+  UNION ALL
+    SELECT c.id, t.root_id FROM categories c JOIN tree t ON c.parent_id = t.id
+)
+SELECT t.root_id, sum(oi.quantity * p.price) AS revenue
+FROM tree t
+JOIN products p     ON p.category_id = t.id
+JOIN order_items oi ON oi.product_id = p.id
+GROUP BY t.root_id
+ORDER BY revenue DESC
+LIMIT 10;
 ```
-select sum(p.price), count(oi.*) from orders o join order_items oi on o.order_id=oi.order_id join products p on p.id = oi.product_no where o.currency='EUR';
-```
 
-An example of usage:
+**1. Read the sizes off the plan.**
 
 ```
-$ time ./random-data-load run --engine=pg --host=127.0.0.1 --user=sbtest --password=sbtest --database=postgres --port=5432 --bulk-size=4500 --rows=500000 --default-relationship=binomial --coin-flip-percent=1 --query-param-freq=0.1 --query="select sum(p.price), count(oi.*) from orders o join order_items oi on o.order_id=oi.order_id join products p on p.id = oi.product_no where o.currency='EUR';" 
-Writing orders (337500/500000) rows...
-Writing orders (500000/500000) rows...
-Writing products (500000/500000) rows...
-Writing order_items (499500/500000) rows...
-
-real	0m16,168s
-user	0m16,549s
-sys	0m1,181s
-
-postgres=# select sum(p.price), count(oi.*) from orders o join order_items oi on o.order_id=oi.order_id join products p on p.id = oi.product_no where o.currency='EUR';
-     sum     | count 
--------------+-------
- 1595.505421 |  3231
-(1 row)
-
-postgres=# select * from products limit 10;
-          id          |             product              |  price   | material  |     feature      |            company             
-----------------------+----------------------------------+----------+-----------+------------------+--------------------------------
- sfkes5nhpegtt977ae2b | Mighty Desk Lamp Quick           | 0.043675 | carbon    | impact-resistant | PeerJ
- uht6n748y9ghghe7gdqa | Practical Ashtray                | 0.684435 | slate     | plug-and-play    | EMC
- fyyf5kgkdj7d87aa7g2c | Incredible Memory-Enabled Grater | 0.007092 | tungsten  | wrinkle-free     | Outline
- cetyjbc84bgfdrjrdrm2 | Self-Adjusting Alarm             | 0.710173 | limestone | led-backlit      | Wolters Kluwer
- mbk78nvxqqpmc3yeep24 | Steam-Powered Rocking Chair      | 0.235886 | silver    | resistant        | ConnectEDU
- aawjj9ce27q88mm3fysg | Vinyl Bag                        | 0.067065 | iron      | interactive      | The Advisory Board Company
- 4fpym2hnm45erv9c5hdw | Artistic Window Blind            | 0.759076 |           | resistant        | IVES Group Inc
- rgxvextkvyz8nhw79btp | Treasure Chest Anti-Slip Quick   | 0.825359 | paper     |                  | Business Monitor International
- t6ng73kmpe7esnjugf66 | Tactical-Revolutionary Cooker    | 0.427905 | composite | rust-proof       | LoopNet
- y35yfc7m2stt6zxh4pqz | Lawn Mower Hemp Express          | 0.181523 |           | energy-efficient | SpaceCurve
-(10 rows)
-
-postgres=# select * from orders limit 10;
- order_id |     shipping_address      |  country   |  zip  | currency |            email             
-----------+---------------------------+------------+-------+----------+------------------------------
-   414763 | 93265 North Rampville     | Belgium    | 17807 | GMD      | mollyhoffman@maxwell.biz
-   414764 | 4359 North Summitburgh    | Egypt      | 25582 | VES      | arnoldwilkinson@gislason.org
-   414765 | 28909 Ranchmouth          | Mauritania | 32167 | ANG      | kendallgleichner@pena.biz
-   414766 | 8214 North Keyton         | Ecuador    | 72284 | AZN      | aaronvillarreal@lambert.info
-   414767 | 657 Loafbury              |            | 63499 | BND      | clairedooley@gross.name
-   414768 | 826 East Tunnelview       | Réunion    | 20814 | CDF      | ardenhamilton@barnett.org
-   414769 | 176 Lake Underpassborough | Gambia     | 81642 | CHF      | adriancummings@knight.org
-   414770 | 87086 Rowhaven            | Armenia    | 68902 | MZN      | dexterstanton@payne.com
-   414771 | 5421 West Lodgeshire      |            | 54406 | EGP      | ezekielrivera@matthews.io
-   414772 | 50778 Lake Unionsside     | Kuwait     | 30627 | GYD      | christaball@cruz.biz
-(10 rows)
+$ random-data-load explain-stat --engine=pg plan.txt
+Tables
+  categories                      300 rows        2 pages     8 bytes/row   (sequential scan actual rows + rows removed by filter)
+  order_items                 1000000 rows     5406 pages     8 bytes/row   (sequential scan actual rows + rows removed by filter)
+  products                      20000 rows      187 pages    14 bytes/row   (sequential scan actual rows + rows removed by filter)
+...
+Flags for the run
+  --rows="categories=300;order_items=1000000;products=20000"
 ```
+
+**2. Generate the data.** Connection flags (`--host`, `--user`, ...) are left out here.
+
+```
+$ random-data-load run --engine=pg --database=shop --query="$(cat query.sql)" \
+    --rows="categories=300;order_items=1000000;products=20000" \
+    --self-fk-depth=3 --self-fk-roots=0.1 \
+    --pareto="products=order_items" \
+    --target-relpages="products=187"
+INF categories points at itself, so its 300 rows are inserted as a tree of 3 levels, roots first: 30, 76, 194. ...
+INF aiming products at 187 pages: 20000 rows over 187 pages is 48 bytes per row
+INF products comes out at 32 bytes per row on its own; filling name=29 to reach 48, which lands on 48
+```
+
+- `categories` is a 3-level tree with 10% of its rows as roots, so the recursive CTE has 3 levels to walk
+- `products.category_id` comes from the declared foreign key. `order_items.product_id` has no declared key, so the tool guesses it from the join, and every order item points at a real product
+- `--pareto` makes a few products hot and leaves a long tail, the way real sales look
+- `--target-relpages` widens `products` to its reported page count, which sets the cost of scanning it
+
+**3. Check the data against the plan.**
+
+```
+$ random-data-load verify --engine=pg --database=shop --query="$(cat query.sql)" plan.txt --all
+Rows  (sequential scan actual rows + rows removed by filter)
+  public.categories                            reported          300   generated          300    +0.0%   ok
+  public.order_items                           reported      1000000   generated      1000000    +0.0%   ok
+  public.products                              reported        20000   generated        20000    +0.0%   ok
+
+Pages
+  public.categories                            reported            2   generated            2    +0.0%   ok
+  public.order_items                           reported         5406   generated         5412    +0.1%   ok
+  public.products                              reported          187   generated          188    +0.5%   ok
+...
+Every figure with a target sits within 0.0500 of it.
+```
+
+**4. Compare the plans.** The generated database gets the reported plan, node for node, at nearly the same costs: 325462 here against 325475 reported.
+
+```
+Limit  (cost=325462.07..325462.10 rows=10 width=36)
+  CTE tree
+    ->  Recursive Union  (cost=0.00..267.55 rows=4080 width=8)
+          ->  Seq Scan on categories  (cost=0.00..5.00 rows=30 width=8)
+                Filter: (parent_id IS NULL)
+          ->  Hash Join  (cost=8.75..22.18 rows=405 width=8)
+                Hash Cond: (t_1.id = c.parent_id)
+                ->  WorkTable Scan on tree t_1  (cost=0.00..6.00 rows=300 width=8)
+                ->  Hash  (cost=5.00..5.00 rows=300 width=8)
+                      ->  Seq Scan on categories c  (cost=0.00..5.00 rows=300 width=8)
+  ->  Sort  (cost=325194.52..325195.02 rows=200 width=36)
+        Sort Key: (sum(((oi.quantity)::numeric * p.price))) DESC
+        ->  HashAggregate  (cost=325187.70..325190.20 rows=200 width=36)
+              Group Key: t.root_id
+              ->  Hash Join  (cost=8632.70..189187.70 rows=13600000 width=16)
+                    Hash Cond: (oi.product_id = p.id)
+                    ->  Seq Scan on order_items oi  (cost=0.00..15412.00 rows=1000000 width=8)
+                    ->  Hash  (cost=3903.70..3903.70 rows=272000 width=16)
+                          ->  Hash Join  (cost=638.00..3903.70 rows=272000 width=16)
+                                Hash Cond: (t.id = p.category_id)
+                                ->  CTE Scan on tree t  (cost=0.00..81.60 rows=4080 width=8)
+                                ->  Hash  (cost=388.00..388.00 rows=20000 width=16)
+                                      ->  Seq Scan on products p  (cost=0.00..388.00 rows=20000 width=16)
+```
+
+**5. Tune the key distribution.** How many order items each product gets is decided by the sampler chosen for the `products=order_items` key. The chart compares the reported database with four settings, each one a run of 1,000,000 order items over the same 20,000 products:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/fk-distribution-dark.svg">
+  <img alt="Share of order_items held by the top X% of products, for the reported database and four sampler settings. The table below gives the values." src="docs/fk-distribution-light.svg">
+</picture>
+
+|Share of order_items held by|top 1% of products|top 10%|top 50%|
+|---|---|---|---|
+|reported database (the target)|46%|68%|90%|
+|`--binomial` (the default, `--coin-flip-percent=1`)|1%|13%|56%|
+|`--binomial --coin-flip-percent=30`|7%|62%|100%|
+|`--pareto` (`--pareto-s=1.1`, the default)|38%|72%|93%|
+|`--pareto --pareto-s=2`|93%|100%|100%|
+
+- the default binomial coin flip spreads children almost evenly across their parents
+- a higher `--coin-flip-percent` concentrates them on the first parents of each sample: at 30%, only about 18% of the products are used at all
+- `--pareto` gives a hot head and a long tail. `--pareto-s` sets how fast it decays, and the default 1.1 is the closest match to the reported database here
 
 ## Options
 
@@ -140,128 +193,6 @@ Foreign key sampling options:
 |--self-fk-roots|Share of a self-referencing table's rows that are roots, their parent key NULL. One number for every table, or per table: `--self-fk-roots="categories=0.02"`. Defaults to the `null_frac` of the parent key in `--stat-file`, else 0.5|
 |--self-fk-depth|Levels of a self-referencing table's tree, roots included, each pointing at the one before. One number for every table, or per table: `--self-fk-depth="employees=6"` (Default: 2)|
 
-### Example
-
-Continuing the example with orders, products and order_items:
-```
--- how many times products are present in order_items
-postgres=# select oi.product_no, count(*) from order_items oi group by 1 order by 2 desc limit 10;
-      product_no      | count 
-----------------------+-------
- gg476vcr2fa9pdmhazhb |     9
- 7vzsn676dzyyyb3b2wv8 |     9
- sny5dzjhjp2zhk6zbxad |     8
- eemd8eng9d8sgk2m2zeg |     8
- 4eahk4nur48t8bcmqq35 |     8
- b5cemgse4ybzkbxuqwdf |     8
- 7yv82qvg3g5mgpvfggv4 |     8
- h3zhu5kwm2frqkgb3c5p |     8
- 3hjg6w6nmrx2z5g66z2d |     8
- akjkd45a7k4h3mcwrsg7 |     8
-(10 rows)
-
--- how many unique products
-postgres=# select count(distinct oi.product_no) from order_items oi;        
- count  
---------
- 303943
-(1 row)
-
-
--- how many unique order ids in order_items. 500k is because of --sequential and --rows being equal between tables
-postgres=# select count(distinct oi.order_id) from order_items oi;
- count  
---------
- 500000
-(1 row)
-
-
-```
-
-Changing the data distribution with a higher --coin-flip-percent:
-
-```
-postgres=# truncate products, orders, order_items;
-TRUNCATE TABLE
-
-./random-data-load run --engine=pg (...) --coin-flip-percent=30 (...)
-
--- still a similar result
-postgres=# select sum(p.price), count(oi.*) from orders o join order_items oi on o.order_id=oi.order_id join products p on p.id = oi.product_no where o.currency='EUR';
-     sum     | count 
--------------+-------
- 1559.053189 |  3110
-(1 row)
-
--- But the data repartity of product ids is different, some products are more "hot"
-postgres=# select oi.product_no, count(*) from order_items oi group by 1 order by 2 desc limit 10;
-      product_no      | count 
-----------------------+-------
- 2cqz6jvnz7avrt59ahgm |    53
- 2vf499qtfkd34th5bat2 |    52
- 2rnv6yhj47k3m29svggq |    51
- 2kqhvjk99c7pftfjqn4n |    50
- 2ev2dmtajgh49k9cdupv |    50
- 2kph4hmd2w29n2dsmh8r |    50
- 284tqufe3psbbyd6r5kb |    50
- 29gp22hggwygagdsvx7g |    50
- 2ajgrfbe6ww3neg6xc3f |    49
- 2afye7ytsxz6afyhr6ku |    49
-(10 rows)
-
--- There's way less diversity of products, ~485k products don't even have 1 order
-postgres=# select count(distinct oi.product_no) from order_items oi;
- count 
--------
- 15357
-(1 row)
-
--- order ids sampling is still sequential, so identical
-postgres=# select count(distinct oi.order_id) from order_items oi;
- count  
---------
- 500000
-(1 row)
-
-
-```
-
-If 15k referenced products isn't diverse enough, we can work with higher --bulk-size.
-This is because sampling is limited to --bulk-size with a LIMIT BY --bulk-size, so low --bulk-size with high --coin-flip-percent will ultimately lead to the very first sampled rows repeated too often
-
-```
-postgres=# truncate order_items;
-TRUNCATE TABLE
-
--- we'll restrict to just order_items not to re-insert orders or products.
-./random-data-load run --engine=pg (...) --coin-flip-percent=30 --bulk-size=30000 --table=order_items (...)
-
-
--- more product diversity
-postgres=# select count(distinct oi.product_no) from order_items oi;        
- count  
---------
- 100395
-(1 row)
-
--- which will mean a lesser "max" usage of a single product. Higher --coin-flip-percent  could force hotter rows again
-postgres=# select oi.product_no, count(*) from order_items oi group by 1 order by 2 desc limit 10;
-      product_no      | count 
-----------------------+-------
- 68uzayu85vgbcfy2fand |    14
- 2x6pg2wztdeq6gxsj7je |    13
- 4dmzwejn2g8kfx5ak774 |    13
- 6jy36mxygtyf3yvqph6f |    13
- 7yfnr2nsqqeud5d9543w |    13
- 4ncnh6nr2km6ddwya7wn |    13
- 2h26zpsmsucgg4a2gnrh |    13
- 22gkgw4egqemr5ht5fhx |    12
- 594p72pt9wjmva3xwnm6 |    12
- 48jsvueqqhw9webchje7 |    12
-(10 rows)
-
-```
-
 ## Foreign keys support
 A column under a foreign key is filled with values sampled from its parent table, so joins return rows. The key can be declared in the schema, added with `--add-fk`, or guessed from the `--query`. Parents are inserted before their children. Composite keys are supported, and a parent key of any type (`uuid`, `numeric`, ...) is copied verbatim.
 
@@ -273,6 +204,8 @@ How the parent rows are picked depends on the relationship. Each sample reads at
 |`--binomial`|a coin flip per parent row, `TABLESAMPLE BERNOULLI` on postgres, `rand() <` on MySQL. A high `--coin-flip-percent` with a low `--bulk-size` makes the first rows hot|
 |`--pareto`|zipf over `ROW_NUMBER()`, tuned with `--pareto-s`/`--pareto-v`: hot first rows with a long tail. Full scan for each sample|
 |`--normal`|box-muller around `--normal-mean` with `--normal-stddev`. Full scan for each sample|
+
+Step 5 of the [example](#example) charts how each sampler spreads 1,000,000 children over 20,000 parents.
 
 Worth knowing:
 - distributions are sized from the parent table, not from `--rows`. For example, `--coin-flip-percent` is raised when the parent is too small to return anything
