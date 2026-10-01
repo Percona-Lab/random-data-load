@@ -263,92 +263,32 @@ postgres=# select oi.product_no, count(*) from order_items oi group by 1 order b
 ```
 
 ## Foreign keys support
-If a field has Foreign Keys constraints, `random-data-load` will get samples from the referenced tables in order to insert valid values for the field.  
-To enforce orders, an arbitrary 'ORDER BY 1' is made. This is so that --sequential can create 1-1 relationship, and to better master the eventual distribution of --binomial.
+A column under a foreign key is filled with values sampled from its parent table, so joins return rows. The key can be declared in the schema, added with `--add-fk`, or guessed from the `--query`. Parents are inserted before their children. Composite keys are supported, and a parent key of any type (`uuid`, `numeric`, ...) is copied verbatim.
 
-Composites foreign keys are supported.
-With very low chances to sample rows, we might sample too little. The tool will loop until it sampled enough rows to fill the next bulk insert.
+How the parent rows are picked depends on the relationship. Each sample reads at most `--bulk-size` rows, `ORDER BY 1`:
 
-A parent key is read whatever its type, including the types no value can be generated for: a `uuid`, `numeric` or `boolean` primary key is read and copied verbatim into the child, so a column this tool cannot invent a value for can still be pointed at. Note that postgres reports both `numeric(p,s)` and `decimal(p,s)` as `numeric`.
+|Relationship|Sampling|
+|------------|--------|
+|`--sequential`|`LIMIT/OFFSET` walk: 1-1 while the parent has rows left, round robin after that|
+|`--binomial`|a coin flip per parent row, `TABLESAMPLE BERNOULLI` on postgres, `rand() <` on MySQL. A high `--coin-flip-percent` with a low `--bulk-size` makes the first rows hot|
+|`--pareto`|zipf over `ROW_NUMBER()`, tuned with `--pareto-s`/`--pareto-v`: hot first rows with a long tail. Full scan for each sample|
+|`--normal`|box-muller around `--normal-mean` with `--normal-stddev`. Full scan for each sample|
 
-Every distribution is measured against the parent table it samples, not against --rows: --coin-flip-percent is raised when the parent is too small for it (a 1% coin flip over a 500-row dimension table is expected to return 5 rows, and returns none often enough for it to be the normal outcome), --normal-mean and --normal-stddev default to the middle and a tenth of the parent, and --sequential wraps back to the parent's first row once it has handed out all of them.
-
-An empty parent table is refused, naming it: there is nothing for a foreign key to point
-at, and the child rows it cannot fill are not silently left out. That check now happens
-before anything is written rather than when the first sample is taken. A `--query` names
-the tables it reads, and those tables have NOT NULL foreign keys to tables it does not
-name; the run used to discover that part way through, with the tables ahead of it in the
-insert order already loaded. The whole closure is walked up front and refused in one
-message naming every table that has to be filled first, or, with `--fill-fk-parents`,
-those tables are added to the run and filled with `--rows`. A parent
-that already holds rows is left alone either way.
-
-A unique key whose columns come from **several** foreign keys is filled from all of them
-at once. Filled one key at a time, each sampler walks its own parent and behaves
-perfectly on its own column, but the combinations they produce start repeating as soon
-as the shortest walk comes round again: `inventory(warehouse_id, product_id)` over 100
-warehouses and 4,000 products repeats a pair every 4,000 rows whatever either sampler
-does, and the primary key refuses it. Instead the run walks the cross product of those
-parents, reading each row's position like an odometer, so a combination only repeats
-once every one of them has been used. The sampling options do not apply to such a key —
-the walk is what keeps it unique — and asking for more rows than the parents can make
-combinations is refused, naming the counts, before the first row of the child is
-written.
-
-That walk reads parent rows by position with `ROW_NUMBER()`, so it needs MySQL 8.0. The
-Pareto and normal samplers below still use user variables and still work on 5.7.
-
-**1.** sequential relationships will sample with LIMIT and OFFSET:  
-```
-SELECT <field[, field2]> FROM <referenced schema>.<referenced table> ORDER BY 1 LIMIT <--bulk-size> OFFSET y
-```
-This isn't the fastest method but it works for every types and compound primary keys. The value of the current OFFSET is protected by mutex to prevents frequent duplicates. 
-
-**2.** binomial relations will sample differently between postgres and mysql
-
-**2.1** For postgres it relies on TABLESAMPLE
-```
-SELECT <field[, field2]> FROM <referenced schema>.<referenced table> TABLESAMPLE BERNOUILLI (<--coin-flip-percent>) ORDER BY 1 LIMIT <--bulk-size>
-```
-
-**2.2** For mysql, it relies on RAND()
-```
-SELECT <field[, field2]> FROM <referenced schema>.<referenced table> WHERE rand() < (<--coin-flip-percent>/100) ORDER BY 1 LIMIT <--bulk-size>
-```
-
-**3.** Pareto and normal distribution
-Both methods are implemented using row_number()
-Postgres uses row_number()
-```
-select <fields,..> from (SELECT columns, ROW_NUMBER() OVER (ORDER BY <fields...>) as rownumber FROM table ) f where rownumber IN (x1, x2, ...) and <checking fields not to be null> order by 1 limit <--bulk-size>
-```
-While MySQL is still implemented with user variables to retain mysql 5.7 compatibility
-```
-select <fields,...> from table, (SELECT @rownumber := 0) f where (@rownumber := @rownumber + 1) IN (x1, x2, ...) and <checking fields not to be null> order by 1 limit <--bulk-size>
-```
-
-**3.1** Pareto
-"pareto" is actually using zipf random number generation. The slope can be tuned with --pareto-s such as higher value will mean faster decay. The other parameter --pareto-v is not documented in its related go stddlib package for now.
-First rows will be hotter and sampled far more commonly, but it will nonetheless retain a long "tail" over the whole table.
-
-**3.2** Normal
-"normal" is actually implemented using box-muller transformation (reproducing "normal" distribution from 2 uniformly random float numbers between 0.0 and 1.0)
-It will mostly sample around the --normal-mean based on --normal-stddev, and very few rows on the outlier parts.
+Worth knowing:
+- distributions are sized from the parent table, not from `--rows`. For example, `--coin-flip-percent` is raised when the parent is too small to return anything
+- an empty parent table is refused before anything is written, and the error names every table that needs filling first. `--fill-fk-parents` fills them with `--rows` instead
+- a unique key built from several foreign keys walks the cross product of its parents, so combinations never repeat (MySQL 8.0+). Asking for more rows than there are combinations is refused
 
 ### Tables pointing at themselves
-
-A table with a foreign key on itself, such as `employees.manager_id` or `categories.parent_id`, is inserted as a tree, one level at a time. The roots go in first with their parent key NULL, and then each level points at the level before it. `--self-fk-roots` is the share of rows that are roots, and `--self-fk-depth` is the number of levels, roots included. Each level is the one before it times the same factor, picked so that the roots get their share and the levels add up to `--rows`:
+A self-referencing table (`employees.manager_id`, `categories.parent_id`) is inserted as a tree. The roots go in first with a NULL parent key, then each level points at the level before it by coin flip. `--self-fk-roots` sets the share of roots and `--self-fk-depth` sets the number of levels, roots included. Level sizes are picked so they add up to `--rows`:
 
 | --rows | --self-fk-roots | --self-fk-depth | levels |
 |---|---|---|---|
 | 1000 | 0.5 (default) | 2 (default) | 500, 500 |
 | 1000 | 0.1 | 4 | 100, 166, 276, 458 |
-| 1000 | 0.25 | 4 | 250, 250, 250, 250 |
 | 1000 | 0.7 | 3 | 700, 227, 73 |
 
-A share below 1/depth fans out like an org chart, and a share above it thins out like a comment thread. The run logs the sizes it picked. A `--stat-file` covering the parent key sets the share of roots from its `null_frac` when `--self-fk-roots` is not given, because a root is the only row whose parent key is NULL.
-
-A level samples its parents by coin flip, as `--binomial` does, from the level before it only. Every row therefore sits exactly as deep as the level it was inserted at, and a recursive CTE walks exactly `--self-fk-depth` levels. `--coin-flip-percent` applies as it does to any parent. The level is selected by a range on its key, recorded as the largest key before each level starts, so no sample has to number the table's rows. This needs a key the database numbers as rows come in (auto-increment, serial, identity). Without one, a level can point at any row already in the table, its own included, and the run warns. Naming the key in `--binomial`, `--sequential`, `--normal` or `--pareto`, for example `--sequential="employees=employees"`, samples it with that sampler instead. A table pointing at a self-referencing one is inserted after every level of it.
+Telling the levels apart needs a key the database numbers itself (auto-increment, serial, identity). Without one, a level can point at any row already in the table, and the run warns. Naming the table in a sampler flag, such as `--sequential="employees=employees"`, uses that sampler instead.
 
 ## Guessing implicit foreign keys from queries
 If no foreign keys are explicitely defined in the schema, but the query requires columns to match, `random-data-load` will infer the foreign keys and insert valid values so that the query returns rows.
@@ -387,236 +327,49 @@ It will not guess a foreign key for:
 Conditions on either side of an OR are kept as separate single-column keys, never merged into a composite one: only one of them has to hold, so merging would demand more of the data than the query does.
 
 ## Reusing the data distribution of a real database
-
-Setting `--null-freq` and `--values-freq-map` by hand means knowing the shape of
-the production data in the first place. Postgres already measured it: `pg_stats` holds
-a `null_frac`, a `most_common_vals` and a `most_common_freqs` for every analyzed
-column, and those three are exactly what the two options take. It also holds an
-`avg_width`, which is what `--target-bytes-per-row` takes once added up over a table's
-columns.
-
-`export-stat` prints the command that dumps them. It reads nothing but `pg_stats`,
-so it is safe to hand over to whoever has access to the database being copied:
+Instead of setting `--null-freq` and `--values-freq-map` by hand, reuse what postgres has already measured in `pg_stats`. `export-stat` prints a read-only `psql` command that dumps `null_frac`, `most_common_vals`, `most_common_freqs` and `avg_width` for the tables and columns the `--query` uses:
 
 ```
-random-data-load export-stat --engine=pg --query="select o.total from customers c join orders o on c.id = o.customer_id" --database=shop
-```
-
-```
-# Reads pg_stats and writes nothing. Run it on the database whose data
-# distribution you want to reproduce, then pass the file to:
-#   random-data-load run --stat-file=pg_stats.json ...
-psql -X -q -A -t -d shop -f - > pg_stats.json <<'SQL'
-SELECT coalesce(json_agg(s), '[]'::json)
-  FROM (SELECT schemaname, tablename, attname, null_frac, avg_width,
-               (most_common_vals::text::text[]) AS most_common_vals,
-               most_common_freqs
-          FROM pg_stats
-         WHERE schemaname = 'public'
-           AND lower(tablename) IN ('customers', 'orders')
-           AND lower(attname) IN ('c', 'customer_id', 'customers', 'id', 'o', 'orders', 'total')) s;
-SQL
-```
-
-The dump is narrowed down to the tables and columns the `--query` uses, the same
-whitelist that decides which fields get generated. Without a `--query`, or with one
-selecting a `*`, it covers every column of the tables instead — which is also what a
-row width needs, since a subset of the columns adds up to less than a row. `--max-common-vals`
-caps how many common values each column contributes, since postgres stores up to
-`default_statistics_target` of them.
-
-Feeding it back needs nothing else, `--table` or `--query` aside:
-
-```
+random-data-load export-stat --engine=pg --database=shop --query="..."
+# run the printed command on the source database, it writes pg_stats.json
 random-data-load run --engine=pg --database=shop --query="..." --rows=100000 --stat-file=pg_stats.json
 ```
 
-A few things worth knowing:
+The run then reproduces each column's NULL share and most common values. For a table the dump covers whole, it also reproduces the row width.
 
-- **the dump only carries statistics, never a row**. `most_common_vals` does hold real
-  column values, though, so it is production data and should be treated as such
-- values are matched to a table and a column of the run, case-insensitively. Anything
-  the run does not insert into is ignored
-- **a foreign key column keeps its skew, not its values.** `most_common_vals` for such a
-  column holds the source database's own parent ids, and this run's parent was filled
-  with ids of its own making, so inserting them would point the key at rows that do not
-  exist. The frequencies beside them are kept instead, and reproduced by pointing that
-  share of the child's rows at one parent row each — which is the figure that matters,
-  since postgres reads `most_common_freqs[1]` of the inner join column to size a hash
-  join's build side. The share is reduced by what the relationship's own sampling
-  contributes on its own, so the result lands on what was measured rather than above it.
-  Only single-column keys: the common values of one column of a composite key say how
-  often that column repeats, not how often the pair does
-- `--null-freq`, `--values-freq-map` and `--query-param-freq` win. Each of them is
-  an instruction and the export is a measurement, so setting one is how you override
-  what the export says about a value. In particular `--query-param-freq` is how you
-  force a query to return rows whatever the export measured
-- **`--query-param-freq` defaults to 0**, so by default the export is the only thing
-  speaking for a column. Inserting a literal on 10% of the rows because a query mentions
-  it is a selectivity nobody measured, and it used to win over the measured one:
-  `status='cancelled'` at 10% instead of 3.98% is a sequential scan where the reported
-  side had a bitmap scan
-- a value is never counted twice, whichever of them it came from
-- a column postgres recorded no NULL for gets none, rather than falling back to
-  `--null-freq`
-- `null_frac` is scaled up before use. A row is drawn as NULL first and then
-  overwritten when a common value is drawn, so a column whose values cover 60% of its
-  rows only keeps its NULLs on the other 40%. What ends up in the generated table is
-  the `null_frac` that was measured
-- frequencies that add up to more than 1 are warned about, and NULL then takes
-  whatever share is left
-- **the row width comes with it**, for a table the dump covers whole: the columns'
-  `avg_width` added up is what `--target-bytes-per-row` would have had to be given by
-  hand. A dump narrowed by a `--query` covers part of a row, so the run names the
-  columns it is missing and leaves the width alone rather than aiming the table at
-  something too narrow. Either width flag overrides it. See
-  [Aiming a table at a row width or a page count](#aiming-a-table-at-a-row-width-or-a-page-count)
-
-`--engine=mysql` is refused for now rather than exporting something unusable:
-`information_schema.COLUMN_STATISTICS` only holds histograms, and only for the
-columns someone explicitly ran `ANALYZE TABLE ... UPDATE HISTOGRAM ON` against. On
-MySQL, set the frequencies by hand with `--null-freq` and `--values-freq-map`.
+- `most_common_vals` holds real column values, so treat the dump as production data
+- foreign key columns keep their skew but not their values, because the source's parent ids do not exist here
+- explicit flags win over the dump: `--null-freq`, `--values-freq-map`, `--query-param-freq` and the width flags. `--query-param-freq` defaults to 0, so by default the dump alone decides a column's values
+- `--max-common-vals` caps how many common values each column contributes
+- postgres only. MySQL has no comparable statistics, so set the frequencies by hand there
 
 ## Aiming a table at a row width or a page count
-
-Row width decides how many rows fit in a page, page count decides what a sequential
-scan costs, and scan costs decide the plan — including whether postgres parallelises
-at all. Solving for a width by hand is a load, a measurement, an adjustment and a
-reload, and it is usually the longest loop in a reproduction.
+Row width decides the page count, the page count decides scan costs, and scan costs decide the plan. Ask for the target directly instead of tuning it by hand:
 
 ```
-random-data-load run --engine=pg --database=shop --table=orders --rows=3600000 \
-    --target-relpages=44053
-```
-
-```
+$ random-data-load run --engine=pg --database=shop --table=orders --rows=3600000 --target-relpages=44053
 INF aiming orders at 44053 pages: 3600000 rows over 44053 pages is 96 bytes per row
-INF orders comes out at 41 bytes per row on its own; filling shipping_address=61,
-    note=1, to reach 96, which lands on 96
 ```
 
-Either end of the same target can be asked for:
+- `--target-bytes-per-row=N` is the average width of a row's values, the figure behind a plan's `width=`
+- `--target-relpages=N` is the page count, turned into a width using `--rows`. Postgres only
+- both accept per-table values: `--target-bytes-per-row="97;order_items=24"`. A `--stat-file` that covers a table whole sets the width on its own
 
-- `--target-bytes-per-row=N` is the average width of a row's column values, the figure
-  a plan's `width=` is built from and the one `verify` reads back from the catalog
-- `--target-relpages=N` is the page count, which `--rows` and postgres' page layout
-  turn into a width. Postgres only: InnoDB organises a table by its primary key and
-  reports a size it sampled rather than counted, so the same arithmetic would not mean
-  anything there
-
-Both take a value per table, the same way the sampler tuning does:
-`--target-bytes-per-row="97;order_items=24"`.
-
-There is a third way, which costs nothing: **a `--stat-file` covering a table whole
-sizes its rows on its own**, since `pg_stats` measured an `avg_width` per column on the
-database being reproduced. A flag overrides it, and a dump that covers only part of a
-table is reported and left unused — see
-[Reusing the data distribution of a real database](#reusing-the-data-distribution-of-a-real-database).
-
-```
-INF the dump measures orders at 96 bytes per row over its 9 columns, so that is what
-    its rows are aimed at. --target-bytes-per-row overrides it
-```
-
-A column's `avg_width` is measured over the rows holding a value, and a row width over
-every row, so each column counts for `avg_width * (1 - null_frac)`. That is the figure
-that reproduces both at once: a column of 100 bytes on half its rows has to come out at
-100 bytes on half its rows here too, and aiming at 100 per row would write 100 into
-every value it does write and end up twice as wide as the table being copied. The same
-correction applies to the filling itself, so a nullable column is filled to what it has
-to hold on the rows it is there for.
-
-How it gets there: before the run starts, a few hundred rows are generated and measured
-to find out how wide a row comes out on its own, and the difference is written into the
-columns holding free text — `char`, `varchar`, `text` and `blob` columns this run
-generates itself. Each one's share is proportional to how wide it already is, so a table
-whose free text is one short label and one long description keeps that shape. A column
-that cannot take its share is pinned at what it holds and its remainder goes to the
-others. The target works in both directions: a table that comes out wider than asked for
-has those columns shortened.
-
-Worth knowing:
-
-- a page holds a whole number of rows and a tuple is a whole number of alignment
-  boundaries wide, so **not every page count is reachable**. 20,000 rows fit in 409
-  pages or in 434, and in nothing between; the run says which one it landed on
-- a column sampled from a parent, or pinned by `--values-freq-map`, `--stat-file` or a
-  query literal, **holds what it was given** and is not used as filler
-- the filler is random rather than repeated, because postgres compresses a value before
-  deciding whether to store it out of line, and repeated padding compresses to nothing
-- past roughly 2000 bytes per row postgres pushes the widest column out of line into a
-  TOAST table and the heap stops growing. The run warns and names
-  `ALTER TABLE ... ALTER COLUMN ... SET STORAGE PLAIN`, which keeps it in the heap
-- a table with no free-text column has no room to grow into, and is warned about rather
-  than silently left as it was
-- the width model is postgres': fixed-width types count what their type takes, variable
-  ones count their length plus a header, and per-column alignment padding is not
-  modelled. On MySQL the filling still happens, the arithmetic is only approximate
+The run measures a sample of generated rows, then pads or trims the free-text columns it generates (`char`, `varchar`, `text`, `blob`) to reach the target. Not every page count is reachable, and the run says which one it landed on. Sampled or pinned columns are never used as filler. Past about 2000 bytes per row, postgres moves the widest column into TOAST; the run warns and suggests `SET STORAGE PLAIN`. On MySQL the arithmetic is only approximate.
 
 ## Checking a run against the target
-
-Loading the data is half of a reproduction; the other half is showing that what was
-loaded matches what was asked for. `verify` reads the filled database back and prints
-the two side by side:
+`verify` reads the filled database back and compares it with what was asked for. It takes the same inputs as the run: the target EXPLAIN (row and page counts, selectivities, distinct counts), `--stat-file` (null fractions, common value frequencies, row width) and `--rows`.
 
 ```
-random-data-load verify --engine=pg --database=shop --query="..." plan.txt \
+$ random-data-load verify --engine=pg --database=shop --query="..." plan.txt \
     --rows="customers=200000;orders=3600000" --stat-file=pg_stats.json
-```
-
-```
 Rows  (given)
   public.inventory                             reported       400000   generated            0  -100.0%   OFF
 
-Null fraction  (--stat-file)
-  public.categories.parent_id                  reported       0.1000   generated       0.5000  +400.2%   OFF
-
 Not shown: 189 within 0.0500 of their target, 12 with no target, 29 whose two sides measure different things. --all prints every figure.
-
-2 figures sit outside 0.0500 of their target.
 ```
 
-Only what needs looking at is printed: the figures outside `--tolerance`, and the ones
-that could not be read back. The rest are counted on the `Not shown` line, and `--all`
-prints every figure, `ok` ones included. A caption most lines of a section share is
-said once, next to the section's name.
-
-It takes the same inputs the run took, so the expectations are the ones the run was
-given rather than a second set written by hand:
-
-- the target EXPLAIN, the same file `explain-stat` reads, as a positional argument. Its
-  row counts, page counts, selectivities and distinct counts become targets
-- `--stat-file`, whose `null_frac` and `most_common_freqs` become targets too, and
-  whose `avg_width` added up becomes the row width to hit — the same sum the run was
-  aimed at, and the same one the catalog reports back column for column.
-  `--max-common-vals` caps how many values of each column are checked
-- `--rows`, for the sizes a plan cannot reveal on its own
-
-A figure the reported side never gave is printed by `--all`, marked `no target`: what a
-run actually produced is worth reading on its own. `--tolerance` sets how far a figure may
-sit from its target before it is called `OFF`, and `--strict` turns any `OFF` into a
-non-zero exit status, for a script that should stop there.
-
-The row width is held to when it came from a `--stat-file` covering the table whole,
-because both sides are then the same addition over the same columns. When it came from
-the plan it is only printed by `--all` and never failed on: a plan's `width=` counts only
-the columns that node outputs, and the catalog counts every column of the row. An export covering
-part of a table gives no width at all, and the report names the columns it is missing.
-On MySQL it is advisory either way, since InnoDB reports a sampled average row length
-with the record header in it rather than a sum of column widths.
-
-One more line is printed when it is off but never failed on: the row estimate holds the
-counted rows against what the planner believes the table holds, which says whether the
-statistics are fresh rather than whether the data is right.
-
-The most common values of a foreign key are not held against the export either. They
-are the source database's parent ids, which `run` never inserts: it reproduces how
-skewed the key is instead. They are printed by `--all` and never failed on. The key's
-`null_frac` is still a target like any other column's.
-
-Page and row counts come from the catalog, which holds nothing at all for a table
-filled a moment ago, so `verify` runs an `ANALYZE` first. `--no-analyze` leaves the
-statistics alone if something else already collected them.
+Only figures outside `--tolerance` are printed, and `--all` prints every figure. `--strict` exits non-zero when any figure is `OFF`. `verify` runs `ANALYZE` first, unless `--no-analyze` is given.
 
 ## Skipping fields that are not relevant to the query
 When using --query, `random-data-load` will avoid generating or sampling fields that are not necessary for the query to run.
@@ -705,141 +458,3 @@ A column can be left out of a run on purpose by naming the columns to fill in a 
 There are binaries available for each version for Linux and Darwin. You can find compiled binaries for each version in the releases tab:
 
 https://github.com/Percona-Lab/random-data-load/releases
-
-## To do
-General:
-- [x] better datetime random generation. It should be flexible over its range
-- [x] use more gofakeit generators with regexes to generate "legit" data when possible
-- [ ] helpers to get schema (generate pgdump/mysqldump commands, get index stats, ...)
-- [x] protect against foreign key cycles. Both explicits and implicits (avoid generating implicits that would end up causing loops)
-- [x] detect selfpointing foreign keys 
-- [x] using --values-freq-map to make query parameters work
-
-Sampling:
-- [x] normal law through box-muller, select sqrt(-2*log(random()))*sin(2*pi()*random());
-- [x] pareto laws
-- [ ] have some graph to show --coin-flip-percent with --bulk-size
-
-Stepping stones to fully reproduce cardinalities:
-- [x] incorporating arbitrary values with fixed frequency into the bulk inserts
-- [x] table-per-table override for --rows, --null-frequency
-- [ ] coin-flip-percent per relationship basis. Current thought: adding it to --binomial this way --binomial="parent=child:70" to set the coinflip to 70 for this link
-- [ ] parse col/index stats (cardinality + most_common_elems + most_common_freqs for postgres, cardinalities for MySQL)
-- [ ] estimate/decide sampling method+tuning based on stats
-
-Without clear plan:
-- [x] More random algorithms (as of now, no good implementations has been found for pareto that wouldn't provoke huge runtime and/or huge memory consumption, unless implemented fields are restricted to integers)
-- [ ] guessing joins on subqueries/cte. Joins wouldn't be based on columns, but on expressions
-- [ ] be able to "suplement" existing foreign keys with additional columns ?
-
-## Version history
-
-#### Unreleased
-- parent keys of every type can be sampled, `uuid` and `numeric` included, instead of taking the process down with a nil scan destination
-- a sampled `decimal`/`numeric` keeps every digit the database wrote, and a sampled date is written back in a form the engine reads back as the same instant
-- a run that cannot fill a column now fails with a message naming the table and the reason, and a non-zero exit status, where it used to panic and exit 0
-- --coin-flip-percent, --normal-mean and --normal-stddev are measured against the parent table being sampled rather than against --rows, so a small parent feeding a large child works with the defaults
-- --sequential wraps around the parent instead of running past its last row, making it a round robin once the parent is exhausted; it no longer panics when asked for more children than the parent has rows
-- a value given a frequency by --values-freq-map is no longer counted a second time when the --query mentions it too, which used to add the two frequencies together
-- json and jsonb columns are generated instead of being dropped from the INSERT
-- a column of a type that cannot be generated is reported: warned about when it is nullable or has a default, and refused up front when it is NOT NULL without one, in --dry-run too
-- an empty parent table is reported by name instead of failing with an empty sample
-- sampled text values are escaped, so a parent key holding a quote no longer breaks the insert
-- foreign keys are now guessed through subqueries and CTEs, projected down onto the real tables they read, including UNION branches, recursive CTEs, and columns renamed by an alias or a CTE column list
-- foreign keys are guessed from implicit JOINs written in the WHERE clause, from correlated EXISTS subqueries, and from IN (subquery) semi-joins
-- a multi-column JOIN condition now produces a single composite foreign key instead of one key per column, so a child row no longer mixes columns from different parent rows
-- only equality conditions produce a foreign key; range and negated conditions no longer invent one
-- a JOIN condition that cannot be traced to real columns is now reported with a warning naming the condition, instead of being dropped silently
-- fixed a crash on schema-qualified columns in a JOIN condition, e.g. `ON public.orders.order_id = oi.order_id`
-- fixed a query-guessed foreign key being added a second time when the schema already declared it as part of a composite key, which produced an INSERT listing a column twice
-- columns read only inside a CTE are no longer left out of the generated fields
-- `run --stat-file` reads a column statistics export and sets the null and value frequencies from `null_frac`, `most_common_vals` and `most_common_freqs`
-- new `export-stat` subcommand, printing the command that exports those statistics for the tables and columns a `--query` uses. Only `--engine=pg` for now
-- injected values are now escaped before reaching the INSERT, so a value holding a quote no longer breaks the statement
-- `--query-param-freq=0` no longer registers the query literals at a frequency of zero, it now leaves them out entirely
-- new `verify` subcommand, reading a filled database back and printing its row counts, page counts, selectivities, distinct counts and column statistics next to the reported figures they were meant to match
-- `run --target-bytes-per-row` and `run --target-relpages` aim a table at a row width or a page count, distributing the difference over the columns holding free text, so a load-measure-adjust cycle becomes one flag
-- a unique key whose columns come from several foreign keys is filled from all of them at once, walking the combinations their parents can make, instead of each key walking its own parent and the pair repeating as soon as the shortest walk came round; asking for more rows than those parents can make combinations is refused up front
-- a run whose tables point foreign keys at tables it does not fill is refused before anything is written, in one message naming the whole closure, instead of failing part way through with some tables already loaded; `--fill-fk-parents` adds those tables to the run instead
-- `--stat-file` no longer tries to insert the source database's parent ids into a foreign key column, which pointed it at rows that do not exist; the key's measured skew is reproduced instead, by sampling that share of the child's rows from one parent row each
-- `--query-param-freq` now defaults to 0 and is an override rather than a guess: nothing is inserted because a query mentions it unless you ask, and asking overrides what `--stat-file` measured for those values. A predicate no row will match is named in a warning, so an empty result explains itself
-- `export-stat` also dumps `avg_width`; a `--stat-file` covering a table whole now sizes its rows from it, so the last figure of a reproduction that was still being read off the source database by hand sets itself. `--target-bytes-per-row` and `--target-relpages` still win, and a dump covering only part of a table is reported and left unused rather than aiming the table at a row narrower than the one being reproduced
-- `verify --stat-file` holds the generated row width against that same sum, and fails on it under `--strict` rather than only printing it, since the export and the catalog are the same addition over the same columns. A partial export still gives no target, and the report names the columns it is missing
-- a row width target now accounts for how often each filled column is NULL, instead of falling short of the target by that column's null fraction: a column NULL on a third of its rows is filled to what it has to hold on the other two thirds
-- `verify` prints only the figures outside `--tolerance` and the ones it could not read back, and counts the rest; `--all` prints every figure. A caption most lines of a section share is said once. The most common values of a foreign key are no longer failed on under `--strict`: they are the source's parent ids, which a run never inserts
-- a self-referencing table is inserted as a tree of `--self-fk-depth` levels, with `--self-fk-roots` of its rows as roots, instead of always being split in two halves. Each level samples its parents by coin flip from the level before it only, so the depth is exact, and `--stat-file` sets the share of roots from the parent key's `null_frac`
-- a table pointing at a self-referencing one sees all of its rows. It used to see only the half inserted first, because it could be sorted between the two halves and the parent's row count was taken half way through
-- `--target-relpages` on a self-referencing table spreads the table's whole `--rows` over the pages, where each half used to be aimed at all of them
-
-#### 0.2.3
-- NULL and/or fixed values can be injected at tunable rates
-- --rows can be overriden per tables 
-- improved virtual join handling to enable columns used for many foreign keys
-- query parameters are being inserted at tunable frequencies so that query can work as is 
-- protection against circular dependencies
-- self-referencing tables handling through splitting the tables in two. Half the table will reference the other half
-
-
-#### 0.2.0
-- Support for postgres
-- parallelism
-- bool types
-- uniform foreign key patterns
-- skipping unecessary columns and backfilling missing foreign keys through query analysis
-
-#### 0.1.10
-- Fixed argument validations
-- Fixed ~/.my.cnf loading
-
-#### 0.1.10
-- Fixed connection parameters for MySQL 5.7 (set driver's AllowNativePasswords: true)
-
-#### 0.1.9
-- Added support for bunary and varbinary columns
-- By default, read connection params from ${HOME}/.my.cnf
-
-#### 0.1.8 
-- Fixed error for triggers created with MySQL 5.6
-- Added Travis-CI
-- Code clean up
-
-#### 0.1.7 
-- Support for MySQL 8.0
-- Added --print parameter 
-- Added --version parameter
-- Removed qps parameter
-
-#### 0.1.6 
-- Improved generation speed (up to 50% faster)
-- Improved support for TokuDB (Thanks Agustin Gallego)
-- Code refactored
-- Improved debug logging
-- Added Query Per Seconds support (experimental)
-
-#### 0.1.5 
-- Fixed handling of NULL collation for index parser
-
-#### 0.1.4
-- Fixed handling of time columns
-- Improved support of GENERATED columns
-
-#### 0.1.3
-- Fixed handling of nulls
-
-#### 0.1.2
-- New table parser able to retrieve all the information for fields, indexes and foreign keys constraints.
-- Support for foreign keys constraints
-- Added some tests
-
-#### 0.1.1
-- Fixed random data generation
-
-#### 0.1.0
-- Initial version
-
-
-
-
-
-
-
