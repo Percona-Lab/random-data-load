@@ -250,6 +250,43 @@ func TestRun(t *testing.T) {
 			engines:    []string{"pg", "mysql"},
 			cmds:       [][]string{[]string{"--rows=100", "--table=t1"}, []string{"--rows=100", "--table=t2", "--default-relationship=pareto"}},
 		},
+		// A zipf law over 1000 parents puts 17.9% of the children on the
+		// hottest one and 48.1% on the ten hottest, whatever the bulk size.
+		// Each bulk used to give every parent it drew the same share, however
+		// often it was drawn, so the head came out flattened by an amount the
+		// bulk size decided: t2 held about 1000 on its hottest parent and t3
+		// about 80, for the 8970 asked for.
+		{
+			name: "fk_pareto_bulk_size",
+			checkQuery: `select (select max(c) from (select count(*) c from t2 group by t1_id) a) between 7500 and 10500
+				and (select sum(c) from (select count(*) c from t2 group by t1_id order by c desc limit 10) b) between 22000 and 26000
+				and (select max(c) from (select count(*) c from t3 group by t1_id) a) between 7500 and 10500
+				and (select sum(c) from (select count(*) c from t3 group by t1_id order by c desc limit 10) b) between 22000 and 26000;`,
+			engines: []string{"pg", "mysql"},
+			cmds: [][]string{
+				[]string{"--rows=1000", "--table=t1"},
+				[]string{"--rows=50000", "--table=t2", "--default-relationship=pareto", "--bulk-size=100"},
+				[]string{"--rows=50000", "--table=t3", "--default-relationship=pareto", "--bulk-size=5000"},
+			},
+		},
+		// A bell curve of 50000 children over the parents around row 500, 20
+		// rows wide, puts about 4990 of them on the 5 parents at its mean and
+		// 680 on the 5 at two standard deviations. Filled the way the zipf law
+		// was, every parent drawn in a bulk got the same share of it, and the
+		// curve came out as a plateau: about 2500 in both places.
+		{
+			name: "fk_normal_bulk_size",
+			checkQuery: `select (select count(*) from t2 where t1_id between 498 and 502) between 4300 and 5700
+				and (select count(*) from t2 where t1_id between 538 and 542) between 450 and 900
+				and (select count(*) from t3 where t1_id between 498 and 502) between 4300 and 5700
+				and (select count(*) from t3 where t1_id between 538 and 542) between 450 and 900;`,
+			engines: []string{"pg", "mysql"},
+			cmds: [][]string{
+				[]string{"--rows=1000", "--table=t1"},
+				[]string{"--rows=50000", "--table=t2", "--default-relationship=normal", "--normal-mean=t1=500", "--normal-stddev=t1=20", "--bulk-size=100"},
+				[]string{"--rows=50000", "--table=t3", "--default-relationship=normal", "--normal-mean=t1=500", "--normal-stddev=t1=20", "--bulk-size=5000"},
+			},
+		},
 		{
 			name:       "fk_normal",
 			checkQuery: "select count(distinct t1.id) between 1 and 99 from t1 join t2 on t1.id = t2.t1_id;",

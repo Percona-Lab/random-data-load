@@ -217,15 +217,6 @@ func (_ Postgres) ErrShouldRetryTx(err error) bool {
 	return strings.Contains(err.Error(), "duplicate key value violates unique constraint")
 }
 
-func (_ Postgres) FilterOnRowNumberFromClause(fields []Field, table, schema string) string {
-	escapedFields := EscapedNamesListFromFields(fields)
-	return fmt.Sprintf("(SELECT %s, ROW_NUMBER() OVER (ORDER BY %s) as rownumber FROM %s.%s ) f", escapedFields, escapedFields, Escape(schema), Escape(table))
-}
-
-func (_ Postgres) FilterOnRowNumberVarClause() string {
-	return "rownumber"
-}
-
 // ValueTimeLayout keeps the offset the value was read with, so that a
 // timestamptz sampled from a parent row is stored as the same instant whatever
 // the session's TimeZone is.

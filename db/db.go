@@ -33,8 +33,6 @@ type Engine interface {
 	SetTableMetadata(*Table, string, string)
 	BinomialWhereClause(float64) string
 	ErrShouldRetryTx(error) bool
-	FilterOnRowNumberFromClause([]Field, string, string) string
-	FilterOnRowNumberVarClause() string
 	ValueTimeLayout() string
 	TruncateTables([]*Table) error
 	Analyze(string, string) error
@@ -140,14 +138,6 @@ func BinomialWhereClause(freqPercent float64) string {
 
 func ErrShouldRetryTx(err error) bool {
 	return engine.ErrShouldRetryTx(err)
-}
-
-func FilterOnRowNumberFromClause(fields []Field, table, schema string) string {
-	return engine.FilterOnRowNumberFromClause(fields, table, schema)
-}
-
-func FilterOnRowNumberVarClause() string {
-	return engine.FilterOnRowNumberVarClause()
 }
 
 // ValueTimeLayout is how a date read from a parent row has to be written back

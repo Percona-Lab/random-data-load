@@ -256,14 +256,6 @@ func (_ MySQL) ErrShouldRetryTx(err error) bool {
 	return strings.Contains(err.Error(), "Duplicate entry")
 }
 
-func (_ MySQL) FilterOnRowNumberFromClause(_ []Field, table, schema string) string {
-	return fmt.Sprintf("%s.%s, (SELECT @rownumber := 0) f", Escape(schema), Escape(table))
-}
-
-func (_ MySQL) FilterOnRowNumberVarClause() string {
-	return "(@rownumber := @rownumber + 1)"
-}
-
 // ValueTimeLayout leaves the offset out: DATETIME holds no time zone, and only
 // 8.0.19 and above accept one in a literal at all. The driver hands the value
 // over in the location it will read it back in, so writing it as it stands
