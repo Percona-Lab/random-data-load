@@ -69,7 +69,7 @@ Flags for the run
 $ random-data-load run --engine=pg --database=shop --query="$(cat query.sql)" \
     --rows="categories=300;order_items=1000000;products=20000" \
     --self-fk-depth=3 --self-fk-roots=0.1 \
-    --pareto="products=order_items" \
+    --pareto="products=order_items" --pareto-s=1.01 --pareto-v=8 \
     --target-relpages="products=187"
 INF categories points at itself, so its 300 rows are inserted as a tree of 3 levels, roots first: 30, 76, 194. ...
 INF aiming products at 187 pages: 20000 rows over 187 pages is 48 bytes per row
@@ -78,7 +78,7 @@ INF products comes out at 32 bytes per row on its own; filling name=29 to reach 
 
 - `categories` is a 3-level tree with 10% of its rows as roots, so the recursive CTE has 3 levels to walk
 - `products.category_id` comes from the declared foreign key. `order_items.product_id` has no declared key, so the tool guesses it from the join, and every order item points at a real product
-- `--pareto` makes a few products hot and leaves a long tail, the way real sales look
+- `--pareto` makes a few products hot and leaves a long tail, the way real sales look. Step 5 shows how `--pareto-s=1.01 --pareto-v=8` was picked
 - `--target-relpages` widens `products` to its reported page count, which sets the cost of scanning it
 
 **3. Check the data against the plan.**
@@ -92,38 +92,38 @@ Rows  (sequential scan actual rows + rows removed by filter)
 
 Pages
   public.categories                            reported            2   generated            2    +0.0%   ok
-  public.order_items                           reported         5406   generated         5412    +0.1%   ok
-  public.products                              reported          187   generated          188    +0.5%   ok
+  public.order_items                           reported         5406   generated         5432    +0.5%   ok
+  public.products                              reported          187   generated          189    +1.1%   ok
 ...
 Every figure with a target sits within 0.0500 of it.
 ```
 
-**4. Compare the plans.** The generated database gets the reported plan, node for node, at nearly the same costs: 325462 here against 325475 reported.
+**4. Compare the plans.** The generated database gets the reported plan, node for node, at nearly the same costs: 325489.55 here against 325475.80 reported.
 
 ```
-Limit  (cost=325462.07..325462.10 rows=10 width=36)
+Limit  (cost=325489.52..325489.55 rows=10 width=36)
   CTE tree
-    ->  Recursive Union  (cost=0.00..267.55 rows=4080 width=8)
+    ->  Recursive Union  (cost=0.00..263.80 rows=4080 width=8)
           ->  Seq Scan on categories  (cost=0.00..5.00 rows=30 width=8)
                 Filter: (parent_id IS NULL)
-          ->  Hash Join  (cost=8.75..22.18 rows=405 width=8)
+          ->  Hash Join  (cost=8.75..21.80 rows=405 width=8)
                 Hash Cond: (t_1.id = c.parent_id)
                 ->  WorkTable Scan on tree t_1  (cost=0.00..6.00 rows=300 width=8)
                 ->  Hash  (cost=5.00..5.00 rows=300 width=8)
                       ->  Seq Scan on categories c  (cost=0.00..5.00 rows=300 width=8)
-  ->  Sort  (cost=325194.52..325195.02 rows=200 width=36)
+  ->  Sort  (cost=325225.72..325226.22 rows=200 width=36)
         Sort Key: (sum(((oi.quantity)::numeric * p.price))) DESC
-        ->  HashAggregate  (cost=325187.70..325190.20 rows=200 width=36)
+        ->  HashAggregate  (cost=325218.90..325221.40 rows=200 width=36)
               Group Key: t.root_id
-              ->  Hash Join  (cost=8632.70..189187.70 rows=13600000 width=16)
+              ->  Hash Join  (cost=8643.90..189218.90 rows=13600000 width=16)
                     Hash Cond: (oi.product_id = p.id)
-                    ->  Seq Scan on order_items oi  (cost=0.00..15412.00 rows=1000000 width=8)
-                    ->  Hash  (cost=3903.70..3903.70 rows=272000 width=16)
-                          ->  Hash Join  (cost=638.00..3903.70 rows=272000 width=16)
+                    ->  Seq Scan on order_items oi  (cost=0.00..15432.00 rows=1000000 width=8)
+                    ->  Hash  (cost=3914.90..3914.90 rows=272000 width=16)
+                          ->  Hash Join  (cost=639.00..3914.90 rows=272000 width=16)
                                 Hash Cond: (t.id = p.category_id)
                                 ->  CTE Scan on tree t  (cost=0.00..81.60 rows=4080 width=8)
-                                ->  Hash  (cost=388.00..388.00 rows=20000 width=16)
-                                      ->  Seq Scan on products p  (cost=0.00..388.00 rows=20000 width=16)
+                                ->  Hash  (cost=389.00..389.00 rows=20000 width=16)
+                                      ->  Seq Scan on products p  (cost=0.00..389.00 rows=20000 width=16)
 ```
 
 **5. Tune the key distribution.** How many order items each product gets is decided by the sampler chosen for the `products=order_items` key. The chart compares the reported database with four settings, each one a run of 1,000,000 order items over the same 20,000 products:
@@ -138,12 +138,12 @@ Limit  (cost=325462.07..325462.10 rows=10 width=36)
 |reported database (the target)|46%|68%|90%|
 |`--binomial` (the default, `--coin-flip-percent=1`)|1%|13%|56%|
 |`--binomial --coin-flip-percent=30`|7%|62%|100%|
-|`--pareto` (`--pareto-s=1.1`, the default)|38%|72%|93%|
-|`--pareto --pareto-s=2`|93%|100%|100%|
+|`--pareto` (`--pareto-s=1.1`, the default)|68%|86%|97%|
+|`--pareto --pareto-s=1.01 --pareto-v=8`|43%|72%|92%|
 
 - the default binomial coin flip spreads children almost evenly across their parents
 - a higher `--coin-flip-percent` concentrates them on the first parents of each sample: at 30%, only about 18% of the products are used at all
-- `--pareto` gives a hot head and a long tail. `--pareto-s` sets how fast it decays, and the default 1.1 is the closest match to the reported database here
+- `--pareto` gives a hot head and a long tail, and at its default it is too hot for this database: 68% of the rows on the top 1% of products, against 46%. `--pareto-v` flattens the head and `--pareto-s` sets how fast the tail decays. At `--pareto-s=1.01 --pareto-v=8` the curve never sits more than 4 points from the reported one
 
 ## Options
 
@@ -202,8 +202,8 @@ How the parent rows are picked depends on the relationship. Each sample reads at
 |------------|--------|
 |`--sequential`|`LIMIT/OFFSET` walk: 1-1 while the parent has rows left, round robin after that|
 |`--binomial`|a coin flip per parent row, `TABLESAMPLE BERNOULLI` on postgres, `rand() <` on MySQL. A high `--coin-flip-percent` with a low `--bulk-size` makes the first rows hot|
-|`--pareto`|zipf over `ROW_NUMBER()`, tuned with `--pareto-s`/`--pareto-v`: hot first rows with a long tail. Full scan for each sample|
-|`--normal`|box-muller around `--normal-mean` with `--normal-stddev`. Full scan for each sample|
+|`--pareto`|zipf over `ROW_NUMBER()`, tuned with `--pareto-s`/`--pareto-v`: hot first rows with a long tail. Full scan for each sample, MySQL 8.0+|
+|`--normal`|box-muller around `--normal-mean` with `--normal-stddev`. Full scan for each sample, MySQL 8.0+|
 
 Step 5 of the [example](#example) charts how each sampler spreads 1,000,000 children over 20,000 parents.
 
