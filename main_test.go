@@ -544,9 +544,8 @@ func TestRun(t *testing.T) {
 		},
 
 		// A tree of four levels over a tenth of the rows as roots: 100, 166,
-		// 276 and 458 rows. Every row is reached from a root, none is deeper
-		// than the levels asked for, and most of the last level sits exactly
-		// three hops down, the curve only rarely reaching past its level.
+		// 276 and 458 rows. Each level points at the one before only, so
+		// every row sits exactly as deep as the level it was inserted at.
 		{
 			name: "fk_self_referencing_depth",
 			checkQuery: `with recursive tree(id, depth) as (
@@ -557,7 +556,9 @@ func TestRun(t *testing.T) {
 				select count(*) = 1000
 					and max(depth) = 3
 					and sum(case when depth = 0 then 1 else 0 end) = 100
-					and sum(case when depth = 3 then 1 else 0 end) > 380
+					and sum(case when depth = 1 then 1 else 0 end) = 166
+					and sum(case when depth = 2 then 1 else 0 end) = 276
+					and sum(case when depth = 3 then 1 else 0 end) = 458
 				from tree;`,
 			engines: []string{"pg", "mysql"},
 			cmds:    [][]string{[]string{"--rows=1000", "--table=t1", "--self-fk-depth=4", "--self-fk-roots=0.1"}},

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/Percona-Lab/random-data-load/db"
@@ -17,9 +18,14 @@ import (
 type selfReferencingPlan struct {
 	levels []int64
 
-	// starts[k] is how many rows the table held when level k started, which
-	// is where its rows begin once the table is sorted by its key.
+	// starts[k] is how many rows the table held when level k started.
 	starts []int64
+
+	// key is the column the levels are told apart by, and largest[k] the
+	// largest value of it the table held when level k started, empty when it
+	// held none. key is empty when no column can tell them apart.
+	key     string
+	largest []string
 
 	// roots is the copy of the table inserting level 0.
 	roots *db.Table
@@ -49,15 +55,51 @@ func (cmd *RunCmd) planSelfReferencingLevels(table, roots *db.Table) (*selfRefer
 		sizes[k] = fmt.Sprint(n)
 	}
 	log.Info().Str("table", table.Name).Int64("rows", rows).Int64("depth", depth).Float64("roots", share).Ints64("levels", levels).
-		Msgf("%s points at itself, so its %d rows are inserted as a tree of %d levels, roots first: %s. The roots are %g of the rows (%s), and each level mostly points at the one before it. Set --self-fk-roots and --self-fk-depth to change it",
+		Msgf("%s points at itself, so its %d rows are inserted as a tree of %d levels, roots first: %s. The roots are %g of the rows (%s), and each level points at the one before it. Set --self-fk-roots and --self-fk-depth to change it",
 			table.Name, rows, depth, strings.Join(sizes, ", "), share, from)
 
+	key, ok := generate.SelfReferencingKey(table)
+	if !ok {
+		log.Warn().Str("table", table.Name).
+			Msgf("%s points at itself through a key the database does not number as rows come in, so its levels cannot be told apart once inserted: a level points at any row already in the table, its own included, and the tree does not have the --self-fk-depth asked for. An auto-increment, serial or identity key keeps the levels apart", table.Name)
+	}
+
 	return &selfReferencingPlan{
-		levels: levels,
-		starts: make([]int64, len(levels)),
-		roots:  roots,
-		rows:   rows,
+		levels:  levels,
+		starts:  make([]int64, len(levels)),
+		key:     key,
+		largest: make([]string, len(levels)),
+		roots:   roots,
+		rows:    rows,
 	}, nil
+}
+
+// markLevelStart records where level k of the tree starts: how many rows
+// the table holds, and the largest key it holds.
+func (cmd *RunCmd) markLevelStart(table *db.Table, plan *selfReferencingPlan, k int) error {
+	if k == 0 {
+		count, err := db.CountRows(table.Schema, table.Name)
+		if err != nil {
+			return err
+		}
+		plan.starts[0] = count
+	} else {
+		plan.starts[k] = plan.starts[k-1] + plan.levels[k-1]
+	}
+
+	// A dry run writes nothing, so the levels cannot be told apart by what
+	// the table holds, and each samples whatever it already has.
+	if plan.key == "" || cmd.DryRun {
+		return nil
+	}
+	largest, found, err := db.MaxInt(table.Schema, table.Name, plan.key)
+	if err != nil {
+		return err
+	}
+	if found {
+		plan.largest[k] = strconv.FormatInt(largest, 10)
+	}
+	return nil
 }
 
 // selfReferencingRoots is the share of a self-referencing table's rows that
@@ -118,43 +160,35 @@ func (cmd *RunCmd) statRootsShare(table *db.Table) (float64, string, bool) {
 // was split into: the copy inserts the roots, the table itself every level
 // after them.
 func (cmd *RunCmd) runSelfReferencing(table *db.Table, plan *selfReferencingPlan) error {
-	start, err := db.CountRows(table.Schema, table.Name)
-	if err != nil {
-		return err
-	}
-
 	if table == plan.roots {
-		plan.starts[0] = start
+		if err := cmd.markLevelStart(table, plan, 0); err != nil {
+			return err
+		}
 		return cmd.insert(table, plan.levels[0], plan.rows, nil, fmt.Sprintf("%s level 0", table.Name))
 	}
 
+	// A level left empty by rounding has nothing to point at, so the one
+	// after it points at the last level that has rows.
 	previous := 0
 	for k := 1; k < len(plan.levels); k++ {
-		// A dry run writes nothing, so the table does not grow as the levels
-		// go by and they are placed where they would have started.
-		if cmd.DryRun {
-			start = plan.starts[k-1] + plan.levels[k-1]
+		if err := cmd.markLevelStart(table, plan, k); err != nil {
+			return err
 		}
-		plan.starts[k] = start
 		if plan.levels[k] == 0 {
 			continue
 		}
 
 		level := &generate.SelfReferencingLevel{
 			PreviousStart: plan.starts[previous],
-			PreviousEnd:   start,
+			PreviousEnd:   plan.starts[k],
+			Key:           plan.key,
+			After:         plan.largest[previous],
+			UpTo:          plan.largest[k],
 		}
 		if err := cmd.insert(table, plan.levels[k], plan.rows, level, fmt.Sprintf("%s level %d", table.Name, k)); err != nil {
 			return errors.Wrapf(err, "level %d of %d", k, len(plan.levels)-1)
 		}
 		previous = k
-
-		if !cmd.DryRun && k < len(plan.levels)-1 {
-			start, err = db.CountRows(table.Schema, table.Name)
-			if err != nil {
-				return err
-			}
-		}
 	}
 	return nil
 }

@@ -1,12 +1,12 @@
 package generate
 
 import (
+	"fmt"
 	"math"
-	"math/rand"
+	"strings"
 
 	"github.com/Percona-Lab/random-data-load/db"
 	"github.com/pkg/errors"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -15,11 +15,6 @@ const (
 	// roots, the other half pointing at them.
 	DefaultSelfFKRoots = 0.5
 	DefaultSelfFKDepth = 2
-
-	// selfFKLevelSpread is how many standard deviations of the level sampler
-	// fit in the level it aims at, so that about 95% of the draws land in the
-	// previous level and the rest spill onto the ones before it.
-	selfFKLevelSpread = 4
 )
 
 // SelfReferencingLevels spreads the rows of a table pointing at itself over
@@ -106,14 +101,35 @@ func levelGrowth(roots float64, depth int64) float64 {
 }
 
 // SelfReferencingLevel is where, in a table pointing at itself, the level
-// being inserted takes its parents from. Positions count the rows in the
-// order of the key they point at, from 0, the way the samplers ask for rows.
+// being inserted takes its parents from.
 type SelfReferencingLevel struct {
-	// PreviousStart and PreviousEnd bound the level before this one: rows
-	// PreviousStart up to, and not including, PreviousEnd. Everything before
-	// PreviousEnd was there before this level started, and is all it may
+	// PreviousStart and PreviousEnd count the rows the table held when the
+	// level before this one started, and when this one did. Everything
+	// before PreviousEnd was there before this level, and is all it may
 	// point at.
 	PreviousStart, PreviousEnd int64
+
+	// Key is the column the database numbers as rows come in. The level
+	// before this one holds the rows whose Key is above After and up to
+	// UpTo, the largest values the table held when that level and this one
+	// started. After is empty when the table was empty before that level.
+	// Key is empty when the table has no such column, and its levels cannot
+	// be told apart.
+	Key, After, UpTo string
+}
+
+// keyRange is the condition keeping a sample on the level before this one,
+// for a key pointing at these columns.
+func (l SelfReferencingLevel) keyRange(fields []db.Field) string {
+	if l.Key == "" || l.UpTo == "" || len(fields) != 1 || !strings.EqualFold(fields[0].ColumnName, l.Key) {
+		return ""
+	}
+	key := db.Escape(fields[0].ColumnName)
+	condition := " AND " + key + " <= " + l.UpTo
+	if l.After != "" {
+		condition += " AND " + key + " > " + l.After
+	}
+	return condition
 }
 
 // SetSelfReferencingLevel makes the keys this table has on itself point at
@@ -122,67 +138,67 @@ func (in *Insert) SetSelfReferencingLevel(level *SelfReferencingLevel) {
 	in.selfLevel = level
 }
 
-// LevelSample draws a self-referencing key's parents on a bell curve around
-// the middle of the level before the one being inserted.
+// LevelSample samples a self-referencing key's parents by coin flip, as
+// --binomial does, out of the level before the one being inserted only.
+// Every row then sits exactly as many levels down as it was inserted at, so
+// a recursive query walks exactly --self-fk-depth levels.
 //
-// Most of a level's rows get a parent exactly one level up, so a recursive
-// query walks about as many levels as were asked for, and the curve's tails
-// reach into the levels above that, as a real tree has rows closer to its
-// root than others. It never reaches past the level before: those rows are
-// the ones being inserted, and pointing at them would make the tree deeper
-// than asked.
+// The level is told apart by its key, which the database numbered as its
+// rows came in. Reading rows by their position instead takes numbering the
+// whole table for every sample, which is what made a large tree slow.
 type LevelSample struct {
 	sampleCommon
-	mean, stddev float64
+	coinFlipPercent float64
+	keyRange        string
 }
 
 func NewLevelSample(fields []db.Field, schema, tablename, constraintName string, values [][]Getter, level SelfReferencingLevel, fkCli *ForeignKeyLinks) Sampler {
-	s := &LevelSample{}
-	s.Init(fields, schema, tablename, constraintName, values, level.PreviousEnd, fkCli)
-	width := float64(level.PreviousEnd - level.PreviousStart)
-	s.mean = float64(level.PreviousStart) + width/2
-	s.stddev = width / selfFKLevelSpread
+	s := &LevelSample{keyRange: level.keyRange(fields)}
+
+	// The coin flip is guarded against the rows it can bring back: the
+	// level's own when it is told apart, everything before it otherwise.
+	candidates := level.PreviousEnd
+	if s.keyRange != "" {
+		candidates = level.PreviousEnd - level.PreviousStart
+	}
+	s.Init(fields, schema, tablename, constraintName, values, candidates, fkCli)
+	s.coinFlipPercent = s.guardedCoinFlipPercent(fkCli.CoinFlipPercent.For(tablename))
 	return s
 }
 
 func (s *LevelSample) Sample() error {
-	if s.tableSize <= 0 {
-		return errors.Errorf("%s.%s holds no row yet for its key %s to point at", s.schema, s.table, s.constraintName)
-	}
+	query := fmt.Sprintf("SELECT %s FROM %s.%s %s AND %s%s ORDER BY 1 LIMIT %d",
+		db.EscapedNamesListFromFields(s.fields), db.Escape(s.schema), db.Escape(s.table),
+		db.BinomialWhereClause(s.coinFlipPercent), db.EscapedFieldsIsNotNull(s.fields), s.keyRange, s.limit)
 
-	targets := make([]int, len(s.values))
-	offsets := make([]int64, len(s.values))
-	for row := range s.values {
-		targets[row] = row
-		offsets[row] = s.draw()
-	}
-	return s.fillFromRowNumbers(targets, offsets)
+	return s.query(query, s.values)
 }
 
-// draw picks the position of one parent, drawing again whenever the curve
-// lands outside the rows that may be pointed at.
-func (s *LevelSample) draw() int64 {
-	for attempt := 0; attempt < maxNormalDraws; attempt++ {
-		position := int64(math.Floor(s.mean + s.stddev*rand.NormFloat64()))
-		if position >= 0 && position < s.tableSize {
-			return position
+// SelfReferencingKey is the column a self-referencing table's levels can be
+// told apart by: the one its keys on itself point at, when the database
+// numbers it as rows come in. A key the run generates itself is random, and
+// the rows of every level end up mixed together.
+func SelfReferencingKey(table *db.Table) (string, bool) {
+	var key string
+	for _, c := range table.Constraints {
+		if !c.IsSelfReferencing() {
+			continue
 		}
+		if len(c.ReferencedFields) != 1 || !c.ReferencedFields[0].AutoIncrement {
+			return "", false
+		}
+		if key != "" && !strings.EqualFold(key, c.ReferencedFields[0].ColumnName) {
+			return "", false
+		}
+		key = c.ReferencedFields[0].ColumnName
 	}
-	return min(max(int64(s.mean), 0), s.tableSize-1)
-}
-
-// keyFollowsInsertOrder reports whether the database numbers these key columns
-// as the rows come in, so that the rows of a level are the ones sitting next
-// to each other once sorted by it. A key the run generates itself is random,
-// and the rows of every level end up mixed together.
-func keyFollowsInsertOrder(fields []db.Field) bool {
-	return len(fields) == 1 && fields[0].AutoIncrement
+	return key, key != ""
 }
 
 // selfReferencingSampler picks the sampler for a key this table has on
 // itself, when its rows are being inserted level by level.
 //
-// The level curve is used unless the relationship was named explicitly, in
+// The level sampler is used unless the relationship was named explicitly, in
 // --binomial, --sequential, --normal or --pareto: that is a choice made for
 // this very key, where --default-relationship is one made for every key and
 // knows nothing of levels. A sampler named that way still only sees the rows
@@ -192,13 +208,5 @@ func (in *Insert) selfReferencingSampler(constraint *db.Constraint, values [][]G
 	if explicit, named := in.fklinks.namedRelationship(constraint.ReferencedTableName, in.table.Name); named {
 		return explicit(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, values, level.PreviousEnd, &in.fklinks)
 	}
-
-	logOnce("selfFKKeyOrder:"+in.table.FullName()+"/"+constraint.ConstraintName, func() {
-		if keyFollowsInsertOrder(constraint.ReferencedFields) {
-			return
-		}
-		log.Warn().Str("table", in.table.Name).Str("constraint", constraint.ConstraintName).
-			Msgf("%s points at itself through a key the database does not number as rows come in, so its levels are mixed together once sorted by it and a row can point at any of them, its own included. The tree will not have the --self-fk-depth asked for: an auto-increment, serial or identity key keeps the levels apart", in.table.Name)
-	})
 	return NewLevelSample(constraint.ReferencedFields, constraint.ReferencedTableSchema, constraint.ReferencedTableName, constraint.ConstraintName, values, level, &in.fklinks)
 }

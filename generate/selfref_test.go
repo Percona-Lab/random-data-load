@@ -3,6 +3,8 @@ package generate
 import (
 	"slices"
 	"testing"
+
+	"github.com/Percona-Lab/random-data-load/db"
 )
 
 func TestSelfReferencingLevels(t *testing.T) {
@@ -53,27 +55,54 @@ func TestSelfReferencingLevels(t *testing.T) {
 	}
 }
 
-// The curve aims at the level before, and must never reach the rows after
-// it: those are the level being inserted, and pointing at them makes the tree
-// deeper than asked.
-func TestLevelSampleDrawsStayBeforeTheLevel(t *testing.T) {
-	level := SelfReferencingLevel{PreviousStart: 100, PreviousEnd: 300}
-	s := NewLevelSample(nil, "s", "t", "c", make([][]Getter, 1), level, &ForeignKeyLinks{}).(*LevelSample)
-
-	inPrevious := 0
-	const draws = 100000
-	for i := 0; i < draws; i++ {
-		p := s.draw()
-		if p < 0 || p >= level.PreviousEnd {
-			t.Fatalf("drew position %d, outside the %d rows there were before this level", p, level.PreviousEnd)
-		}
-		if p >= level.PreviousStart {
-			inPrevious++
-		}
+// The levels are told apart by a key the database numbers as rows come in,
+// and only by one: every key the table has on itself has to point at it.
+func TestSelfReferencingKey(t *testing.T) {
+	id := db.Field{ColumnName: "id", AutoIncrement: true}
+	code := db.Field{ColumnName: "code"}
+	other := db.Field{ColumnName: "other_id", AutoIncrement: true}
+	selfKey := func(fields ...db.Field) *db.Constraint {
+		return &db.Constraint{TableName: "t", ReferencedTableName: "t", ReferencedFields: fields}
 	}
-	// four standard deviations wide, so about 97.7% land in it once the
-	// draws past its end are drawn again
-	if share := float64(inPrevious) / draws; share < 0.96 || share > 0.99 {
-		t.Errorf("%.3f of the draws landed in the previous level, expected about 0.977", share)
+
+	for _, tc := range []struct {
+		name        string
+		constraints []*db.Constraint
+		want        string
+	}{
+		{name: "an auto-increment key", constraints: []*db.Constraint{selfKey(id)}, want: "id"},
+		{name: "two keys on the same column", constraints: []*db.Constraint{selfKey(id), selfKey(id)}, want: "id"},
+		{name: "a key the run generates", constraints: []*db.Constraint{selfKey(code)}},
+		{name: "a key on two columns", constraints: []*db.Constraint{selfKey(id, code)}},
+		{name: "two keys on two columns", constraints: []*db.Constraint{selfKey(id), selfKey(other)}},
+		{name: "no key on itself", constraints: []*db.Constraint{{TableName: "t", ReferencedTableName: "p", ReferencedFields: []db.Field{id}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := SelfReferencingKey(&db.Table{Name: "t", Constraints: tc.constraints})
+			if got != tc.want || ok != (tc.want != "") {
+				t.Errorf("got %q, %v, want %q", got, ok, tc.want)
+			}
+		})
+	}
+}
+
+// A key not pointing at the column the levels are told apart by, or a level
+// whose bounds were not read, samples without a range rather than an empty one.
+func TestLevelKeyRangeLeftOut(t *testing.T) {
+	id := []db.Field{{ColumnName: "id"}}
+	for _, tc := range []struct {
+		name   string
+		level  SelfReferencingLevel
+		fields []db.Field
+	}{
+		{name: "no key", level: SelfReferencingLevel{UpTo: "10"}, fields: id},
+		{name: "a dry run reads no bound", level: SelfReferencingLevel{Key: "id"}, fields: id},
+		{name: "another column", level: SelfReferencingLevel{Key: "other", UpTo: "10"}, fields: id},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.level.keyRange(tc.fields); got != "" {
+				t.Errorf("got %q, want no range", got)
+			}
+		})
 	}
 }

@@ -207,14 +207,14 @@ form, --self-fk-depth="employees=6;categories=3", and default to half the rows
 as roots over 2 levels. --stat-file sets the share of roots from the null_frac
 of the parent key when --self-fk-roots is not given.
 
-A level draws its parents on a bell curve around the middle of the level
-before it, about 98% of them landing in it and the rest further up the tree,
-so the depth is at most --self-fk-depth and most rows reach it. That needs a
-key the database numbers as rows come in -- auto-increment, serial, identity
--- for the levels to sit apart once sorted by it; the run warns when it is
-not. Naming the key in --binomial, --sequential, --normal or --pareto, as
-"employees=employees", samples it that way instead, from the rows that were
-there before the level.
+A level samples its parents by coin flip, as binomial does, out of the level
+before it only, so every row sits exactly as deep as the level it went in at
+and a recursive CTE walks exactly --self-fk-depth levels. --coin-flip-percent
+applies, as it does to any parent. The level is told apart by its key, which
+needs one the database numbers as rows come in -- auto-increment, serial,
+identity. Without one a level can point at any row already in the table, its
+own included, and the run warns. Naming the key in --binomial, --sequential,
+--normal or --pareto, as "employees=employees", samples it that way instead.
 
 
 Which tables and keys
