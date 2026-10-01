@@ -416,9 +416,12 @@ func isNoise(word string) bool {
 }
 
 // countQuals counts the conditions a filter applies, which is what the cost
-// charges cpu_operator_cost per row for.
+// charges cpu_operator_cost per row for. An IS [NOT] NULL test calls no
+// operator and costs nothing, so counted as one it took 0.75 of a page off a
+// 300-row table, and its 2 pages came out as 1.
 func countQuals(filter string) int {
-	return strings.Count(filter, " AND ") + strings.Count(filter, " OR ") + 1
+	quals := strings.Count(filter, " AND ") + strings.Count(filter, " OR ") + 1
+	return quals - strings.Count(filter, " IS NULL)") - strings.Count(filter, " IS NOT NULL)")
 }
 
 func sortedKeys[V any](m map[string]V) []string {

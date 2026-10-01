@@ -1,0 +1,35 @@
+Limit  (cost=325475.77..325475.80 rows=10 width=36) (actual time=929.095..929.106 rows=10 loops=1)
+  CTE tree
+    ->  Recursive Union  (cost=0.00..252.55 rows=4080 width=8) (actual time=0.028..0.363 rows=300 loops=1)
+          ->  Seq Scan on categories  (cost=0.00..5.00 rows=30 width=8) (actual time=0.026..0.047 rows=30 loops=1)
+                Filter: (parent_id IS NULL)
+                Rows Removed by Filter: 270
+          ->  Hash Join  (cost=8.75..20.68 rows=405 width=8) (actual time=0.050..0.082 rows=90 loops=3)
+                Hash Cond: (t_1.id = c.parent_id)
+                ->  WorkTable Scan on tree t_1  (cost=0.00..6.00 rows=300 width=8) (actual time=0.001..0.012 rows=100 loops=3)
+                ->  Hash  (cost=5.00..5.00 rows=300 width=8) (actual time=0.098..0.100 rows=270 loops=1)
+                      Buckets: 1024  Batches: 1  Memory Usage: 19kB
+                      ->  Seq Scan on categories c  (cost=0.00..5.00 rows=300 width=8) (actual time=0.012..0.042 rows=300 loops=1)
+  ->  Sort  (cost=325223.22..325223.72 rows=200 width=36) (actual time=910.257..910.262 rows=10 loops=1)
+        Sort Key: (sum(((oi.quantity)::numeric * p.price))) DESC
+        Sort Method: top-N heapsort  Memory: 25kB
+        ->  HashAggregate  (cost=325216.40..325218.90 rows=200 width=36) (actual time=910.103..910.120 rows=30 loops=1)
+              Group Key: t.root_id
+              Batches: 1  Memory Usage: 48kB
+              ->  Hash Join  (cost=8667.40..189216.40 rows=13600000 width=14) (actual time=17.439..499.873 rows=1000000 loops=1)
+                    Hash Cond: (oi.product_id = p.id)
+                    ->  Seq Scan on order_items oi  (cost=0.00..15406.00 rows=1000000 width=8) (actual time=0.044..109.251 rows=1000000 loops=1)
+                    ->  Hash  (cost=3938.40..3938.40 rows=272000 width=14) (actual time=15.897..15.900 rows=20000 loops=1)
+                          Buckets: 262144  Batches: 4  Memory Usage: 2291kB
+                          ->  Hash Join  (cost=637.00..3938.40 rows=272000 width=14) (actual time=6.253..10.140 rows=20000 loops=1)
+                                Hash Cond: (t.id = p.category_id)
+                                ->  CTE Scan on tree t  (cost=0.00..81.60 rows=4080 width=8) (actual time=0.030..0.469 rows=300 loops=1)
+                                ->  Hash  (cost=387.00..387.00 rows=20000 width=14) (actual time=6.033..6.033 rows=20000 loops=1)
+                                      Buckets: 32768  Batches: 1  Memory Usage: 1194kB
+                                      ->  Seq Scan on products p  (cost=0.00..387.00 rows=20000 width=14) (actual time=0.007..2.379 rows=20000 loops=1)
+Planning Time: 1.981 ms
+JIT:
+  Functions: 36
+  Options: Inlining false, Optimization false, Expressions true, Deforming true
+  Timing: Generation 1.557 ms (Deform 0.710 ms), Inlining 0.000 ms, Optimization 0.836 ms, Emission 18.088 ms, Total 20.481 ms
+Execution Time: 961.771 ms
