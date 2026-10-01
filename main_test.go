@@ -38,7 +38,12 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		log.Panicf("Could not start pg resource: %s", err)
 	}
-	mysqlresource, err := pool.Run("mysql", "8.0", []string{"MYSQL_ROOT_PASSWORD=dockertest", "MYSQL_PASSWORD=dockertest", "MYSQL_DATABASE=test", "MYSQL_USER=dockertest"})
+	// MYSQL_TAG=5.7 runs the same cases against an older server
+	mysqlTag := os.Getenv("MYSQL_TAG")
+	if mysqlTag == "" {
+		mysqlTag = "8.0"
+	}
+	mysqlresource, err := pool.Run("mysql", mysqlTag, []string{"MYSQL_ROOT_PASSWORD=dockertest", "MYSQL_PASSWORD=dockertest", "MYSQL_DATABASE=test", "MYSQL_USER=dockertest"})
 	if err != nil {
 		log.Panicf("Could not start mysql resource: %s", err)
 	}
@@ -585,18 +590,22 @@ func TestRun(t *testing.T) {
 		// every row sits exactly as deep as the level it was inserted at.
 		{
 			name: "fk_self_referencing_depth",
-			checkQuery: `with recursive tree(id, depth) as (
-					select id, 0 from t1 where t1_id is null
-					union all
-					select t1.id, tree.depth + 1 from t1 join tree on t1.t1_id = tree.id
-				)
-				select count(*) = 1000
+			// each row's depth from its ancestors, joined rather than walked
+			// with a recursive CTE, which MySQL only has from 8.0
+			checkQuery: `select count(*) = 1000
 					and max(depth) = 3
 					and sum(case when depth = 0 then 1 else 0 end) = 100
 					and sum(case when depth = 1 then 1 else 0 end) = 166
 					and sum(case when depth = 2 then 1 else 0 end) = 276
 					and sum(case when depth = 3 then 1 else 0 end) = 458
-				from tree;`,
+				from (
+					select case when t.t1_id is null then 0 when p1.t1_id is null then 1
+						when p2.t1_id is null then 2 when p3.t1_id is null then 3 else 4 end as depth
+					from t1 t
+					left join t1 p1 on p1.id = t.t1_id
+					left join t1 p2 on p2.id = p1.t1_id
+					left join t1 p3 on p3.id = p2.t1_id
+				) d;`,
 			engines: []string{"pg", "mysql"},
 			cmds:    [][]string{[]string{"--rows=1000", "--table=t1", "--self-fk-depth=4", "--self-fk-roots=0.1"}},
 		},
@@ -984,88 +993,92 @@ func TestRun(t *testing.T) {
 
 	for _, test := range tests {
 		for _, engine := range test.engines {
-			errlog := fmt.Sprintf("engine: %s, container: %s, testname: %s", engine, testsdb[engine].resource.Container.Name, test.name)
-			if !keepDB() {
-				errlog = fmt.Sprintf("to repeat the test and keep the container running, use KEEP_DB=1 go test .\n%s", errlog)
-			}
-
-			switch engine {
-			case "mysql":
-				errlog += fmt.Sprintf("\ndocker exec -it %s mysql -u dockertest -pdockertest test", testsdb[engine].resource.Container.Name)
-			case "pg":
-				errlog += fmt.Sprintf("\ndocker exec -it %s bash -c 'PGPASSWORD=dockertest psql -U dockertest test'", testsdb[engine].resource.Container.Name)
-			}
-			errlog += "\n"
-
-			if err := ddl(engine, "reset"); err != nil {
-				t.Fatalf("%sfailed to reset table schema: %v", errlog, err)
-			}
-			if err := ddl(engine, test.name); err != nil {
-				t.Fatalf("%sfailed to apply test ddl: %v", errlog, err)
-			}
-
-			// calling tool with args directly
-			for i, cmd := range test.cmds {
-				args := []string{"run", "--engine=" + engine, "--host=127.0.0.1", "--user=dockertest", "--password=dockertest", "--database=test", "--port=" + testsdb[engine].port}
-				args = append(args, cmd...)
-
-				if test.inputQuery != "" {
-					args = append(args, "--query="+test.inputQuery)
-				}
-				errlog += toolExecutable + " " + strings.Join(args, " ") + "\n"
-
-				// Only the last run is the one expected to fail: a refusal
-				// often needs the tables it refuses over to be filled first,
-				// and those runs have to succeed like any other.
-				expectErr := ""
-				if i == len(test.cmds)-1 {
-					expectErr = test.expectErr
+			// One subtest per case and engine, so a failure stops that case
+			// only, and one case can be picked: go test -run 'TestRun/fk_pareto'
+			t.Run(test.name+"/"+engine, func(t *testing.T) {
+				errlog := fmt.Sprintf("engine: %s, container: %s, testname: %s", engine, testsdb[engine].resource.Container.Name, test.name)
+				if !keepDB() {
+					errlog = fmt.Sprintf("to repeat the test and keep the container running, use KEEP_DB=1 go test .\n%s", errlog)
 				}
 
-				out, err := exec.Command(toolExecutable, args...).CombinedOutput()
-				if expectErr != "" {
-					// The run has to refuse the job rather than insert
-					// nothing and report success: a script checking $? has
-					// no other way to know.
-					if err == nil {
-						t.Fatalf("%sexpected %s to fail with %q, it succeeded. out: %s", errlog, toolExecutable, expectErr, out)
+				switch engine {
+				case "mysql":
+					errlog += fmt.Sprintf("\ndocker exec -it %s mysql -u dockertest -pdockertest test", testsdb[engine].resource.Container.Name)
+				case "pg":
+					errlog += fmt.Sprintf("\ndocker exec -it %s bash -c 'PGPASSWORD=dockertest psql -U dockertest test'", testsdb[engine].resource.Container.Name)
+				}
+				errlog += "\n"
+
+				if err := ddl(engine, "reset"); err != nil {
+					t.Fatalf("%sfailed to reset table schema: %v", errlog, err)
+				}
+				if err := ddl(engine, test.name); err != nil {
+					t.Fatalf("%sfailed to apply test ddl: %v", errlog, err)
+				}
+
+				// calling tool with args directly
+				for i, cmd := range test.cmds {
+					args := []string{"run", "--engine=" + engine, "--host=127.0.0.1", "--user=dockertest", "--password=dockertest", "--database=test", "--port=" + testsdb[engine].port}
+					args = append(args, cmd...)
+
+					if test.inputQuery != "" {
+						args = append(args, "--query="+test.inputQuery)
 					}
-					if !strings.Contains(string(out), expectErr) {
-						t.Fatalf("%sexpected the failure to mention %q, out: %s", errlog, expectErr, out)
+					errlog += toolExecutable + " " + strings.Join(args, " ") + "\n"
+
+					// Only the last run is the one expected to fail: a refusal
+					// often needs the tables it refuses over to be filled first,
+					// and those runs have to succeed like any other.
+					expectErr := ""
+					if i == len(test.cmds)-1 {
+						expectErr = test.expectErr
 					}
-					continue
+
+					out, err := exec.Command(toolExecutable, args...).CombinedOutput()
+					if expectErr != "" {
+						// The run has to refuse the job rather than insert
+						// nothing and report success: a script checking $? has
+						// no other way to know.
+						if err == nil {
+							t.Fatalf("%sexpected %s to fail with %q, it succeeded. out: %s", errlog, toolExecutable, expectErr, out)
+						}
+						if !strings.Contains(string(out), expectErr) {
+							t.Fatalf("%sexpected the failure to mention %q, out: %s", errlog, expectErr, out)
+						}
+						continue
+					}
+					if err != nil {
+						t.Fatalf("%sfailed to exec %s: %v, out: %s", errlog, toolExecutable, err, out)
+					}
 				}
+
+				// Whatever the check query asserts, the tool's own reading of the
+				// generated tables has to agree with what the run was asked for.
+				if len(test.verify) > 0 {
+					args := []string{"verify", "--engine=" + engine, "--host=127.0.0.1", "--user=dockertest", "--password=dockertest", "--database=test", "--port=" + testsdb[engine].port, "--strict"}
+					args = append(args, test.verify...)
+					errlog += toolExecutable + " " + strings.Join(args, " ") + "\n"
+
+					out, err := exec.Command(toolExecutable, args...).CombinedOutput()
+					if err != nil {
+						t.Fatalf("%sverify refused what the run generated: %v, out: %s", errlog, err, out)
+					}
+				}
+
+				if test.checkQuery == "" {
+					return
+				}
+
+				row := testsdb[engine].db.QueryRow(test.checkQuery)
+				var ok bool
+				err := row.Scan(&ok)
 				if err != nil {
-					t.Fatalf("%sfailed to exec %s: %v, out: %s", errlog, toolExecutable, err, out)
+					t.Fatalf("%sfailed to query check sql: %v", errlog, err)
 				}
-			}
-
-			// Whatever the check query asserts, the tool's own reading of the
-			// generated tables has to agree with what the run was asked for.
-			if len(test.verify) > 0 {
-				args := []string{"verify", "--engine=" + engine, "--host=127.0.0.1", "--user=dockertest", "--password=dockertest", "--database=test", "--port=" + testsdb[engine].port, "--strict"}
-				args = append(args, test.verify...)
-				errlog += toolExecutable + " " + strings.Join(args, " ") + "\n"
-
-				out, err := exec.Command(toolExecutable, args...).CombinedOutput()
-				if err != nil {
-					t.Fatalf("%sverify refused what the run generated: %v, out: %s", errlog, err, out)
+				if !ok {
+					t.Fatalf("%ssql check returned false, query:\n%s", errlog, test.checkQuery)
 				}
-			}
-
-			if test.checkQuery == "" {
-				continue
-			}
-
-			row := testsdb[engine].db.QueryRow(test.checkQuery)
-			var ok bool
-			err := row.Scan(&ok)
-			if err != nil {
-				t.Fatalf("%sfailed to query check sql: %v", errlog, err)
-			}
-			if !ok {
-				t.Fatalf("%ssql check returned false, query:\n%s", errlog, test.checkQuery)
-			}
+			})
 		}
 	}
 }
