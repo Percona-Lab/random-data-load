@@ -202,15 +202,15 @@ How the parent rows are picked depends on the relationship. Each sample reads at
 |------------|--------|
 |`--sequential`|`LIMIT/OFFSET` walk: 1-1 while the parent has rows left, round robin after that|
 |`--binomial`|a coin flip per parent row, `TABLESAMPLE BERNOULLI` on postgres, `rand() <` on MySQL. A high `--coin-flip-percent` with a low `--bulk-size` makes the first rows hot|
-|`--pareto`|zipf over `ROW_NUMBER()`, tuned with `--pareto-s`/`--pareto-v`: hot first rows with a long tail. Full scan for each sample, MySQL 8.0+|
-|`--normal`|box-muller around `--normal-mean` with `--normal-stddev`. Full scan for each sample, MySQL 8.0+|
+|`--pareto`|zipf over the parent's rows, tuned with `--pareto-s`/`--pareto-v`: hot first rows with a long tail. Full scan for each sample|
+|`--normal`|box-muller around `--normal-mean` with `--normal-stddev`. Full scan for each sample|
 
 Step 5 of the [example](#example) charts how each sampler spreads 1,000,000 children over 20,000 parents.
 
 Worth knowing:
 - distributions are sized from the parent table, not from `--rows`. For example, `--coin-flip-percent` is raised when the parent is too small to return anything
 - an empty parent table is refused before anything is written, and the error names every table that needs filling first. `--fill-fk-parents` fills them with `--rows` instead
-- a unique key built from several foreign keys walks the cross product of its parents, so combinations never repeat (MySQL 8.0+). Asking for more rows than there are combinations is refused
+- a unique key built from several foreign keys walks the cross product of its parents, so combinations never repeat. Asking for more rows than there are combinations is refused
 
 ### Tables pointing at themselves
 A self-referencing table (`employees.manager_id`, `categories.parent_id`) is inserted as a tree. The roots go in first with a NULL parent key, then each level points at the level before it by coin flip. `--self-fk-roots` sets the share of roots and `--self-fk-depth` sets the number of levels, roots included. Level sizes are picked so they add up to `--rows`:

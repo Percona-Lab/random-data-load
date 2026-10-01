@@ -217,6 +217,10 @@ func (_ Postgres) ErrShouldRetryTx(err error) bool {
 	return strings.Contains(err.Error(), "duplicate key value violates unique constraint")
 }
 
+func (_ Postgres) RowNumberedSubquery(fields []Field, schema, table string) string {
+	return windowRowNumberedSubquery(fields, schema, table)
+}
+
 // ValueTimeLayout keeps the offset the value was read with, so that a
 // timestamptz sampled from a parent row is stored as the same instant whatever
 // the session's TimeZone is.

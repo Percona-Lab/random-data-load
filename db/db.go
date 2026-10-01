@@ -38,6 +38,7 @@ type Engine interface {
 	Analyze(string, string) error
 	TableStorage(string, string) (Storage, error)
 	GetUniqueKeys(string, string) ([][]string, error)
+	RowNumberedSubquery([]Field, string, string) string
 }
 
 var ErrFieldsNotFound = errors.New("fields not found")
@@ -178,17 +179,19 @@ func MaxInt(schema, table, column string) (int64, bool, error) {
 	return largest.Int64, largest.Valid, nil
 }
 
-// RowNumberedSubquery wraps a table so its rows can be asked for by position.
-//
-// Both engines have window functions, so both get the same subquery. The
-// alternative on mysql, a user variable incremented as the rows go by, cannot
-// be selected and compared against in the same statement without being
-// incremented twice per row.
+// RowNumberedSubquery wraps a table so its rows can be asked for by position,
+// as a derived table named f with a rownumber column counting from 1.
 //
 // Rows holding a NULL in any of the columns are left out, so the numbering is
 // dense over the rows that can actually fill a foreign key. Pair it with
 // CountNonNullRows, which counts the same set.
 func RowNumberedSubquery(fields []Field, schema, table string) string {
+	return engine.RowNumberedSubquery(fields, schema, table)
+}
+
+// windowRowNumberedSubquery numbers the rows with ROW_NUMBER(), in the order
+// of the columns.
+func windowRowNumberedSubquery(fields []Field, schema, table string) string {
 	columns := EscapedNamesListFromFields(fields)
 	return fmt.Sprintf("(SELECT %s, ROW_NUMBER() OVER (ORDER BY %s) AS rownumber FROM %s.%s WHERE %s) f",
 		columns, columns, Escape(schema), Escape(table), EscapedFieldsIsNotNull(fields))
